@@ -1,0 +1,16 @@
+{
+  "name": "cornerstone",
+  "version": "1.0.0",
+  "description": "",
+  "main": "engine.js",
+  "private": true,
+  "scripts": {
+    "test": "node tests/engine.test.js && node tests/net.test.js && node tests/smoke.test.js && node tests/online-smoke.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "jsdom": "^30.1.1"
+  }
+}
