@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en" data-text="large">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cornerstone: a game of corners</title>
+  <meta name="description" content="Cornerstone is a free, easy-to-read board game for 1 to 4 players. Fit your pieces on the board, touching only at the corners.">
+  <meta name="theme-color" content="#123a2c">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23123a2c'/%3E%3Crect x='4' y='4' width='11' height='11' rx='2' fill='%231b5fd1'/%3E%3Crect x='17' y='17' width='11' height='11' rx='2' fill='%23f2b200'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to the game</a>
+  <div id="live" class="sr" role="status" aria-live="polite"></div>
+
+  <main id="main">
+    <!-- MENU -->
+    <section id="screen-menu" class="screen" aria-labelledby="menu-title">
+      <div class="hero">
+        <svg id="logo" class="logo" viewBox="0 0 12 9" role="img" aria-label="Four coloured game pieces touching at their corners"></svg>
+        <h1 id="menu-title" class="title">Cornerstone</h1>
+        <p class="lead">A game of corners. Fit as many of your pieces on the board as you can, and let them touch only at the corners.</p>
+        <div class="stack">
+          <button class="btn primary big" id="menu-play">Play on this device</button>
+          <button class="btn big" id="menu-online">Play online with friends</button>
+          <button class="btn big" id="menu-help">How to play</button>
+          <button class="btn big" id="menu-stats">My scores</button>
+          <button class="btn big" id="menu-settings">Settings: text size, colours, sound</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ONLINE ENTRY -->
+    <section id="screen-online" class="screen" hidden aria-labelledby="online-title">
+      <div class="panel wide">
+        <h2 id="online-title">Play online</h2>
+        <p id="online-status" class="hint-line" role="status">Connecting…</p>
+        <div class="stack" style="max-width:26rem">
+          <label>Your name<input type="text" id="online-name" maxlength="14" class="textbox"></label>
+          <button class="btn primary big" id="online-create">Create a room</button>
+        </div>
+        <p class="hint-line" style="margin-top:1.5rem">Or join a room someone already created:</p>
+        <div class="row">
+          <input type="text" id="online-code" maxlength="5" placeholder="ROOM CODE" class="textbox code" aria-label="Room code">
+          <button class="btn primary" id="online-join">Join room</button>
+        </div>
+        <p id="online-error" class="hint-line" role="alert"></p>
+        <div class="row end"><button class="btn" id="online-back">Back</button></div>
+      </div>
+    </section>
+
+    <!-- ONLINE LOBBY -->
+    <section id="screen-lobby" class="screen" hidden aria-labelledby="lobby-title">
+      <div class="panel wide">
+        <h2 id="lobby-title">Room <span id="lobby-code"></span></h2>
+        <p class="hint-line">Share this code so friends can join. Everyone needs their own device.</p>
+        <div class="row">
+          <button class="btn small" id="lobby-copy">Copy room code</button>
+          <button class="btn small" id="lobby-copy-link">Copy invite link</button>
+        </div>
+        <fieldset class="modes" id="lobby-mode-group" style="margin-top:1.25rem">
+          <legend>How many players?</legend>
+          <label class="choice"><input type="radio" name="lmode" value="2"><span><b>2 players</b><small>Two colours each.</small></span></label>
+          <label class="choice"><input type="radio" name="lmode" value="3"><span><b>3 players</b><small>Fourth colour shared.</small></span></label>
+          <label class="choice"><input type="radio" name="lmode" value="4"><span><b>4 players</b><small>One colour each.</small></span></label>
+        </fieldset>
+        <div id="lobby-seats" class="seats" style="margin-top:1rem"></div>
+        <p id="lobby-note" class="hint-line" role="status"></p>
+        <div class="row end">
+          <button class="btn" id="lobby-leave">Leave room</button>
+          <button class="btn primary" id="lobby-start">Start game</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- SETUP -->
+    <section id="screen-setup" class="screen" hidden aria-labelledby="setup-title">
+      <div class="panel wide">
+        <h2 id="setup-title">Who is playing?</h2>
+        <fieldset class="modes">
+          <legend>How many players?</legend>
+          <label class="choice"><input type="radio" name="mode" value="2"><span><b>2 players</b><small>Each player controls two colours.</small></span></label>
+          <label class="choice"><input type="radio" name="mode" value="3"><span><b>3 players</b><small>The fourth colour is shared.</small></span></label>
+          <label class="choice"><input type="radio" name="mode" value="4"><span><b>4 players</b><small>One colour each.</small></span></label>
+        </fieldset>
+        <p class="hint-line">Want to play alone? Set every other seat to Computer.</p>
+        <div id="seats" class="seats"></div>
+        <div class="row end">
+          <button class="btn" id="setup-back">Back</button>
+          <button class="btn primary" id="setup-start">Start game</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- GAME -->
+    <section id="screen-game" class="screen game" hidden aria-label="Game">
+      <header class="topbar">
+        <button class="btn small" id="game-menu">Menu</button>
+        <p class="brand" aria-hidden="true">Cornerstone</p>
+        <button class="btn small" id="game-settings">Settings</button>
+      </header>
+      <p id="online-banner" class="hint-line online-banner" hidden role="status"></p>
+
+      <div class="layout">
+        <div class="boardcol">
+          <div id="status" class="status" aria-live="off">
+            <span id="status-chip" class="chip" aria-hidden="true"></span>
+            <div>
+              <p id="status-main" class="status-main"></p>
+              <p id="status-sub" class="status-sub"></p>
+            </div>
+          </div>
+          <div id="boardwrap" class="boardwrap">
+            <canvas id="board" tabindex="0" role="application"
+              aria-label="Game board, 20 by 20 squares. With a piece chosen, use the arrow keys to move it, R to rotate, F to flip, and Enter to place it."></canvas>
+          </div>
+          <div class="zoombar">
+            <button class="btn small" id="zoom-out">Smaller board</button>
+            <span id="zoom-label" class="zoomlabel"></span>
+            <button class="btn small" id="zoom-in">Bigger board</button>
+          </div>
+        </div>
+
+        <aside class="sidecol">
+          <div id="scoreboard" class="scoreboard" aria-label="Squares left for each colour"></div>
+
+          <div class="hand" id="hand">
+            <div class="preview" id="hand-preview" aria-hidden="true"></div>
+            <div class="handbtns">
+              <button class="btn" id="btn-rotate"><span aria-hidden="true">⟳</span> Rotate</button>
+              <button class="btn" id="btn-flip"><span aria-hidden="true">⇋</span> Flip</button>
+              <button class="btn primary place" id="btn-place">Place piece</button>
+              <button class="btn small" id="btn-hint">Show me a move</button>
+              <button class="btn small" id="btn-undo">Take back my last move</button>
+            </div>
+          </div>
+
+          <div class="tray">
+            <h2 id="tray-title" class="tray-title"></h2>
+            <div id="tray" class="trayGrid"></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <!-- DIALOGS -->
+  <dialog id="dlg-help" aria-labelledby="help-title">
+    <div class="dlg">
+      <h2 id="help-title">How to play</h2>
+      <ol class="rules">
+        <li><b>The goal.</b> Fit as many of your squares on the board as you can.</li>
+        <li><b>Your first piece</b> must cover the marked corner square of the board for your colour.</li>
+        <li><b>Every piece after that</b> must touch one of your own pieces <b>at a corner only</b>. Your own pieces may never touch along a side.</li>
+        <li><b>Other colours</b> can touch yours any way they like. They will try to block you!</li>
+        <li><b>Stuck?</b> If none of your pieces fit, you pass. The game ends when nobody can place another piece.</li>
+      </ol>
+      <div class="diagrams">
+        <figure><svg id="fig-yes" viewBox="0 0 5 4" role="img" aria-label="Two blue pieces meeting corner to corner"></svg><figcaption><span class="ok">✓ Yes.</span> Corner to corner.</figcaption></figure>
+        <figure><svg id="fig-no" viewBox="0 0 5 4" role="img" aria-label="Two blue pieces sharing a side"></svg><figcaption><span class="bad">✗ No.</span> Sharing a side.</figcaption></figure>
+      </div>
+      <h3>Playing a piece</h3>
+      <ol class="rules">
+        <li>Choose a piece from the list.</li>
+        <li>Tap or click the board to preview it. Use <b>Rotate</b> and <b>Flip</b> to turn it.</li>
+        <li>Press <b>Place piece</b>. You can also tap the previewed piece again.</li>
+      </ol>
+      <h3>Scoring</h3>
+      <p>Each square left in your hand is -1 point. Place all 21 pieces for +15. Finish with the single square for +5 more. Highest score wins.</p>
+      <h3>Keyboard</h3>
+      <p>Click the board, then use the <b>arrow keys</b> to move a piece, <b>R</b> to rotate, <b>F</b> to flip, <b>[</b> and <b>]</b> to change piece, and <b>Enter</b> to place it.</p>
+      <div class="row end"><button class="btn primary" data-close>Close</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-settings" aria-labelledby="set-title">
+    <div class="dlg">
+      <h2 id="set-title">Settings</h2>
+      <fieldset class="setting">
+        <legend>Text size</legend>
+        <div class="seg">
+          <label><input type="radio" name="text" value="normal"><span>Normal</span></label>
+          <label><input type="radio" name="text" value="large"><span>Large</span></label>
+          <label><input type="radio" name="text" value="xl"><span>Extra large</span></label>
+        </div>
+      </fieldset>
+      <label class="toggle"><input type="checkbox" id="set-contrast"><span><b>High contrast</b><small>Black and white with thicker lines.</small></span></label>
+      <label class="toggle"><input type="checkbox" id="set-shapes"><span><b>Shapes on pieces</b><small>A circle, triangle, square or diamond on each colour, so colours are easy to tell apart.</small></span></label>
+      <label class="toggle"><input type="checkbox" id="set-corners"><span><b>Show where I can play</b><small>Small markers on the corners where your next piece can go.</small></span></label>
+      <label class="toggle"><input type="checkbox" id="set-sound"><span><b>Sound effects</b><small>Soft clicks and chimes.</small></span></label>
+      <label class="toggle"><input type="checkbox" id="set-speak"><span><b>Read turns aloud</b><small>Uses your device's voice to say whose turn it is and what was played.</small></span></label>
+      <label class="toggle"><input type="checkbox" id="set-motion"><span><b>Reduce movement</b><small>No animations or confetti.</small></span></label>
+      <fieldset class="setting">
+        <legend>Computer player speed</legend>
+        <div class="seg">
+          <label><input type="radio" name="speed" value="slow"><span>Relaxed</span></label>
+          <label><input type="radio" name="speed" value="normal"><span>Normal</span></label>
+          <label><input type="radio" name="speed" value="fast"><span>Quick</span></label>
+        </div>
+      </fieldset>
+      <div class="row end"><button class="btn primary" data-close>Done</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-stats" aria-labelledby="stats-title">
+    <div class="dlg">
+      <h2 id="stats-title">My scores</h2>
+      <div id="stats-body"></div>
+      <div class="row end">
+        <button class="btn small" id="stats-csv">Download as spreadsheet</button>
+        <button class="btn small" id="stats-clear">Erase history</button>
+        <button class="btn primary" data-close>Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-over" aria-labelledby="over-title">
+    <div class="dlg">
+      <h2 id="over-title"></h2>
+      <p id="over-sub" class="lead-sm"></p>
+      <div id="over-body"></div>
+      <div class="row end">
+        <button class="btn" id="over-menu">Main menu</button>
+        <button class="btn primary" id="over-again">Play again</button>
+      </div>
+    </div>
+  </dialog>
+
+  <canvas id="confetti" aria-hidden="true"></canvas>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="engine.js"></script>
+  <script src="net.js"></script>
+  <script src="supabase-transport.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
