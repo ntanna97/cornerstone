@@ -32,12 +32,13 @@
     channel.on('broadcast', { event: 'msg' }, ({ payload }) => {
       msgCbs.forEach((cb) => cb(payload.event, payload.data, payload.from));
     });
-    channel.subscribe((status) => {
+    channel.subscribe((status, err) => {
+      console.log('[Cornerstone] realtime channel status:', status, err || '');
       if (status === 'SUBSCRIBED') {
         channel.track(Object.assign({ joinedAt }, myMeta));
         onReady(transport);
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-        onError && onError(status);
+        onError && onError(status, err);
       }
     });
 

@@ -733,8 +733,25 @@
   // ---------- online play ----------
   let sbClient = null;
   function getSupabaseClient() {
+    if (typeof window.supabase === 'undefined' || !window.supabase.createClient) {
+      throw new Error('script-blocked');
+    }
     if (!sbClient) sbClient = window.supabase.createClient(window.CornerstoneSupabaseTransport.URL, window.CornerstoneSupabaseTransport.KEY);
     return sbClient;
+  }
+  function describeConnectError(e) {
+    const msg = e && e.message;
+    console.error('[Cornerstone] connect failed:', e);
+    if (msg === 'script-blocked') {
+      return "The multiplayer service didn't load. If you use an ad blocker or a strict browser privacy mode (like Brave Shields), try turning it off for this site, then reload the page.";
+    }
+    if (msg === 'timeout' || msg === 'TIMED_OUT') {
+      return "The connection timed out. If you're on a school, work, or hotel Wi-Fi, it may be blocking this. Try a different network (like phone data) and reload the page.";
+    }
+    if (msg === 'CHANNEL_ERROR') {
+      return "The multiplayer service refused the connection. Try reloading the page; if it keeps happening, it may be your network blocking it.";
+    }
+    return "Couldn't connect (" + (msg || 'unknown error') + "). Try reloading the page.";
   }
   function mirrorConfigFromLobby(room) {
     config.mode = room.lobby.mode;
@@ -765,7 +782,7 @@
             const room = new CornerstoneNet.Room(transport, { code, name, host: asHost, mode: config.mode, engine: E });
             resolve(room);
           },
-          (status) => { if (settled) return; settled = true; clearTimeout(timer); reject(new Error(status)); }
+          (status, err) => { if (settled) return; settled = true; clearTimeout(timer); reject(err instanceof Error ? err : new Error(status)); }
         );
       } catch (e) { if (!settled) { settled = true; clearTimeout(timer); reject(e); } }
     });
@@ -774,7 +791,7 @@
     const code = CornerstoneNet.makeCode();
     $('#online-error').textContent = ''; $('#online-status').textContent = 'Creating room ' + code + '…';
     try { enterLobby(await connectRoom(code, true)); }
-    catch (e) { $('#online-error').textContent = "Couldn't create a room. Check your connection and try again."; $('#online-status').textContent = ''; }
+    catch (e) { $('#online-error').textContent = describeConnectError(e); $('#online-status').textContent = ''; }
   }
   async function joinRoom() {
     const code = ($('#online-code').value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -784,7 +801,7 @@
       const room = await connectRoom(code, false);
       enterLobby(room);
       setTimeout(() => { if (S.online === room && !room.started && room.presence.length < 2) $('#lobby-note').textContent = 'No one else is here yet. Double-check the room code with your friend.'; }, 3500);
-    } catch (e) { $('#online-error').textContent = "Couldn't join that room. Check the code and try again."; $('#online-status').textContent = ''; }
+    } catch (e) { $('#online-error').textContent = describeConnectError(e); $('#online-status').textContent = ''; }
   }
   function enterLobby(room) {
     S.online = room;
