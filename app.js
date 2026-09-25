@@ -39,7 +39,8 @@
     token: 0, running: false, humanTurn: false, viewColor: 0,
     start: 0, zoom: 1, cell: 24, anim: null, over: false,
     online: null, onlineBotTimer: null, onlineName: '', handHidden: false,
-    connecting: false, announced: '', conn: 'ok', justPlaced: false, fit: null
+    connecting: false, announced: '', conn: 'ok', justPlaced: false, fit: null,
+    closeUp: false, autoZoomed: false, baseCell: 24, touchTapAt: 0
   };
   const ZOOMS = [1, 1.4, 1.8, 2.3];
   let zoomIdx = 0;
@@ -295,6 +296,7 @@
     if (isShared(c)) g.meta.sharedCount++;
     g.turn = (c + 1) % 4;
     S.sel = null; S.cursor = null; S.locked = false; S.humanTurn = false; S.hintMsg = '';
+    autoWholeBoard();
     if (!reducedMotion()) { S.anim = { cells, t0: performance.now() }; animate(); }
     renderAll();
   }
@@ -345,7 +347,7 @@
       S.sel.noFit = true;
       snd.no(); say('This piece does not fit anywhere right now. Try a different piece.');
     }
-    renderAll(); scrollToCursor();
+    autoCloseUp(); renderAll(); scrollToCursor();
   }
   function ghostCells() {
     if (!S.sel || !S.cursor) return null;
@@ -354,6 +356,7 @@
     const ox = S.cursor.x - Math.floor(w / 2), oy = S.cursor.y - Math.floor(h / 2);
     return o.map(([x, y]) => [x + ox, y + oy]);
   }
+  const CORNER_NAME = ['top right', 'bottom right', 'bottom left', 'top left'];
   const REASONS = {
     off: 'Part of the piece hangs off the board.',
     overlap: 'Some of those squares are already taken.',
@@ -398,9 +401,9 @@
     S.cursor = { x: mv.ox + Math.floor(w / 2), y: mv.oy + Math.floor(h / 2) }; S.locked = true;
     S.hintMsg = 'Here is one good move. Press Place piece to use it, or choose something else.';
     snd.pick(); say(S.hintMsg);
-    renderAll(); scrollToCursor();
+    autoCloseUp(); renderAll(); scrollToCursor();
   }
-  function moveCursor(dx, dy) {
+  function moveCursor(dx, dy, quiet) {
     if (!myTurn()) return;
     if (!S.sel) { say('Choose a piece first, then move it.'); return; }
     if (!S.cursor) {
@@ -409,8 +412,8 @@
     } else {
       S.cursor = { x: Math.max(0, Math.min(N - 1, S.cursor.x + dx)), y: Math.max(0, Math.min(N - 1, S.cursor.y + dy)) };
     }
-    S.locked = true; renderAll(); scrollToCursor();
-    const gs = ghostState(); if (gs && !gs.res.ok) snd.no();
+    S.locked = true; S.hintMsg = ''; renderAll(); scrollToCursor();
+    const gs = ghostState(); if (gs && !gs.res.ok && !quiet) snd.no();
   }
 
   // ---------- board input ----------
@@ -425,17 +428,74 @@
     if (!S.cursor || S.cursor.x !== c.x || S.cursor.y !== c.y) { S.cursor = c; renderStatus(); draw(); }
   });
   canvas.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse' && !S.locked && S.cursor) { S.cursor = null; renderStatus(); draw(); } });
-  canvas.addEventListener('click', (e) => {
+  // The legal spot for the selected piece nearest to a tapped square (within 2 squares), so taps don't
+  // have to be precise. Keeps the current orientation if it fits nearby; otherwise turns the piece.
+  function snapNear(c, radius) {
+    const g = S.game, col = g.turn, fr = E.frontier(g, col), p = S.sel.p;
+    const orients = [[S.sel.rot, S.sel.flip]];
+    for (let f = 0; f < 2; f++) for (let r = 0; r < 4; r++) if (!(r === S.sel.rot && !!f === S.sel.flip)) orients.push([r, !!f]);
+    for (let k = 0; k < orients.length; k++) {
+      const [rot, flip] = orients[k], o = E.transform(p, rot, flip);
+      let best = null;
+      for (const [fx, fy] of fr) for (const [ax, ay] of o) {
+        const ox = fx - ax, oy = fy - ay, cells = o.map(([x, y]) => [x + ox, y + oy]);
+        let d = Infinity; for (const [x, y] of cells) d = Math.min(d, Math.max(Math.abs(x - c.x), Math.abs(y - c.y)));
+        if (d > radius || !E.check(g, col, cells).ok) continue;
+        const cur = cursorFor(o, ox, oy), score = d * 100 + Math.abs(cur.x - c.x) + Math.abs(cur.y - c.y);
+        if (!best || score < best.score) best = { rot, flip, cursor: cur, score, turned: k > 0 };
+      }
+      if (best) return best;
+    }
+    return null;
+  }
+  function handleTap(c) {
     if (!myTurn()) return;
-    if (!S.sel) { snd.no(); say('Choose a piece from the list first.'); return; }
-    const c = cellAt(e);
+    if (!S.sel) { snd.no(); say('Choose one of your pieces first.'); return; }
     const gs = ghostState();
     if (S.locked && gs && gs.res.ok && gs.cells.some(([x, y]) => x === c.x && y === c.y)) { placeNow(); return; }
-    S.cursor = c; S.locked = true; S.hintMsg = '';
-    renderAll();
-    const g2 = ghostState();
-    if (g2) say(g2.res.ok ? 'This spot works. Press Place piece.' : REASONS[g2.res.reason], false);
+    const spot = snapNear(c, 2);
+    if (spot) {
+      S.sel.rot = spot.rot; S.sel.flip = spot.flip; S.cursor = spot.cursor; S.locked = true;
+      S.hintMsg = spot.turned ? 'Turned the piece so it fits here. Press Place piece.' : '';
+      snd.pick(); renderAll();
+      say(spot.turned ? S.hintMsg : 'This spot works. Press Place piece.', false);
+    } else {
+      S.cursor = c; S.locked = true; S.hintMsg = '';
+      renderAll();
+      const g2 = ghostState();
+      if (g2) say(REASONS[g2.res.reason], false);
+    }
+  }
+  canvas.addEventListener('click', (e) => { if (Date.now() - S.touchTapAt < 700) return; handleTap(cellAt(e)); });
+  // Touch: tap = snap the piece there; drag starting on the piece = slide it; drag elsewhere = look around the close-up.
+  const drag = { id: null };
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse') return;
+    const wrap = $('#boardwrap'), c = cellAt(e), gs = myTurn() ? ghostState() : null;
+    Object.assign(drag, { id: e.pointerId, x: e.clientX, y: e.clientY, sl: wrap.scrollLeft, st: wrap.scrollTop, mode: null,
+      onGhost: !!(gs && gs.cells.some(([x, y]) => Math.abs(x - c.x) <= 0 && Math.abs(y - c.y) <= 0)), cur: S.cursor ? { x: S.cursor.x, y: S.cursor.y } : null });
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
   });
+  canvas.addEventListener('pointermove', (e) => {
+    if (e.pointerType === 'mouse' || drag.id !== e.pointerId) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!drag.mode) { if (Math.hypot(dx, dy) < 8) return; drag.mode = drag.onGhost && S.sel && drag.cur && myTurn() ? 'piece' : 'pan'; }
+    const wrap = $('#boardwrap');
+    if (drag.mode === 'pan') { wrap.scrollLeft = drag.sl - dx; wrap.scrollTop = drag.st - dy; return; }
+    const step = Math.max(S.cell, 22); // at least 22px of finger movement per square, so small boards aren't twitchy
+    const nx = Math.max(0, Math.min(N - 1, drag.cur.x + Math.round(dx / step))), ny = Math.max(0, Math.min(N - 1, drag.cur.y + Math.round(dy / step)));
+    if (nx !== S.cursor.x || ny !== S.cursor.y) { S.cursor = { x: nx, y: ny }; S.locked = true; S.hintMsg = ''; renderStatus(); renderHand(); draw(); }
+  });
+  const endDrag = (e) => {
+    if (e.pointerType === 'mouse' || drag.id !== e.pointerId) return;
+    const mode = drag.mode; drag.id = null;
+    if (e.type === 'pointercancel') return;
+    S.touchTapAt = Date.now();
+    if (!mode) { handleTap(cellAt(e)); return; }
+    if (mode === 'piece') { const gs = ghostState(); if (gs) { if (gs.res.ok) snd.pick(); else snd.no(); say(gs.res.ok ? 'This spot works. Press Place piece.' : REASONS[gs.res.reason], false); } }
+  };
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
   canvas.addEventListener('keydown', (e) => {
     if (!myTurn()) return;
     const k = e.key;
@@ -455,22 +515,57 @@
       selectPiece(list[(i + (k === ']' ? 1 : -1) + list.length) % list.length]);
     }
   });
-  function scrollToCursor() {
-    if (!S.cursor) return;
-    const wrap = $('#boardwrap'), cs = S.cell;
-    const x = S.cursor.x * cs, y = S.cursor.y * cs;
-    if (wrap.scrollWidth > wrap.clientWidth) wrap.scrollLeft = Math.max(0, x - wrap.clientWidth / 2);
-    if (wrap.scrollHeight > wrap.clientHeight) wrap.scrollTop = Math.max(0, y - wrap.clientHeight / 2);
-  }
+  function scrollToCursor() { if (S.cursor) centerOn(S.cursor.x, S.cursor.y); }
 
   // ---------- sizing ----------
+  const isCompact = () => !!(window.matchMedia && window.matchMedia('(max-width: 999px)').matches);
   function fit() {
     const wrap = $('#boardwrap');
-    const avail = Math.max(240, wrap.clientWidth - 16);
-    const base = Math.max(12, Math.min(40, Math.floor(avail / N)));
-    S.cell = Math.round(base * ZOOMS[zoomIdx]);
+    if (isCompact()) {
+      // the board fills whatever space the one-screen layout leaves it
+      const avail = Math.max(200, Math.min(wrap.clientWidth, wrap.clientHeight) - 10);
+      const base = Math.max(10, Math.min(40, Math.floor(avail / N)));
+      S.baseCell = base;
+      S.cell = S.closeUp ? Math.max(base + 1, Math.min(44, Math.max(28, Math.round(base * 2.2)))) : base; // close-up: 28-44px squares
+    } else {
+      const avail = Math.max(240, wrap.clientWidth - 16);
+      const base = Math.max(12, Math.min(40, Math.floor(avail / N)));
+      S.baseCell = base;
+      S.cell = Math.round(base * ZOOMS[zoomIdx]);
+    }
     $('#zoom-label').textContent = 'Board size: ' + Math.round(ZOOMS[zoomIdx] * 100) + '%';
     $('#zoom-out').disabled = zoomIdx === 0; $('#zoom-in').disabled = zoomIdx === ZOOMS.length - 1;
+    const vt = $('#view-toggle');
+    vt.innerHTML = `<span class="ico" aria-hidden="true">🔍</span> <span class="lbl">${S.closeUp ? 'Zoom out' : 'Zoom in'}</span>`;
+    vt.setAttribute('aria-label', S.closeUp ? 'Show the whole board' : 'Zoom in on the board');
+  }
+  function centerOn(x, y) {
+    const wrap = $('#boardwrap'), cs = S.cell;
+    if (wrap.scrollWidth > wrap.clientWidth) wrap.scrollLeft = Math.max(0, (x + .5) * cs - wrap.clientWidth / 2);
+    if (wrap.scrollHeight > wrap.clientHeight) wrap.scrollTop = Math.max(0, (y + .5) * cs - wrap.clientHeight / 2);
+  }
+  function centerOnMine() { // middle of my own pieces, or my corner if I haven't played yet
+    const g = S.game, c = S.viewColor; let sx = 0, sy = 0, n = 0;
+    for (let i = 0; i < g.board.length; i++) if (g.board[i] === c) { sx += i % N; sy += Math.floor(i / N); n++; }
+    if (n) centerOn(Math.round(sx / n), Math.round(sy / n)); else centerOn(COLORS[c].corner[0], COLORS[c].corner[1]);
+  }
+  function setCloseUp(on, auto) {
+    if (S.closeUp === on) return;
+    S.closeUp = on; S.autoZoomed = !!(on && auto);
+    fit(); draw();
+    if (on) { if (S.cursor) scrollToCursor(); else centerOnMine(); }
+  }
+  // Picking a piece on a small screen zooms in on it; after the move we zoom back out to show everyone's moves.
+  function autoCloseUp() { if (isCompact() && !S.closeUp && S.baseCell < 30) { S.closeUp = true; S.autoZoomed = true; fit(); } }
+  function autoWholeBoard() { if (S.closeUp) { S.closeUp = false; S.autoZoomed = false; fit(); } } // after every move: show everyone's moves
+  $('#view-toggle').onclick = () => { setCloseUp(!S.closeUp, false); renderAll(); if (S.closeUp) { if (S.cursor) scrollToCursor(); else centerOnMine(); } };
+  if (window.ResizeObserver) { // the board's space changes when controls appear/disappear or the phone rotates
+    let last = '';
+    new ResizeObserver(() => {
+      const w = $('#boardwrap'), k = w.clientWidth + 'x' + w.clientHeight;
+      if (k === last || !S.game || !isCompact()) { last = k; return; }
+      last = k; fit(); draw(); if (S.closeUp && S.cursor) scrollToCursor();
+    }).observe($('#boardwrap'));
   }
   $('#zoom-in').onclick = () => { zoomIdx = Math.min(ZOOMS.length - 1, zoomIdx + 1); fit(); draw(); scrollToCursor(); };
   $('#zoom-out').onclick = () => { zoomIdx = Math.max(0, zoomIdx - 1); fit(); draw(); };
@@ -525,6 +620,8 @@
       canvas.width = Math.round(size * dpr); canvas.height = Math.round(size * dpr);
       canvas.style.width = size + 'px'; canvas.style.height = size + 'px';
     }
+    const wrapEl = canvas.parentElement;
+    canvas.style.marginTop = isCompact() ? Math.max(0, Math.floor((wrapEl.clientHeight - 8 - size) / 2)) + 'px' : '';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, size, size);
     ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, size, size);
@@ -597,19 +694,20 @@
         if (s.type === 'human' && s.owner && !S.online.isPresent(s.owner)) return { main: `Waiting for ${s.name} to reconnect…`, sub: 'Their seat is kept for a little while. After that, the computer plays for them.', tone: '', c };
         if (s.type === 'human') return { main: `${s.name}'s turn`, sub: `Playing ${COLORS[c].name}. Waiting for their move…`, tone: '', c };
       }
-      return { main: `${seat.name} is thinking…`, sub: `Playing ${COLORS[c].name}`, tone: '', c };
+      return { main: `${seat.name}'s turn`, sub: `The computer is thinking… (${COLORS[c].name})`, tone: '', c };
     }
     const who = S.online ? (isShared(c) ? 'Your turn: the shared colour' : 'Your turn')
       : isShared(c) ? `${seat.name}, play the shared colour` : (config.seats.filter((s) => s.type === 'human').length === 1 && seat.name === 'You' ? 'Your turn' : `${seat.name}, your turn`);
     const head = `${who} (${COLORS[c].name})`;
     if (!S.sel) {
-      const sub = g.first[c] ? 'Choose a piece. Your first piece must cover the marked corner.' : 'Choose a piece from the list.';
+      const sub = g.first[c] ? `Pick a piece. It must cover your corner square (${CORNER_NAME[c]}).` : 'Pick one of your pieces.';
       return { main: head, sub, tone: '', c };
     }
     if (!S.cursor) return { main: head, sub: 'Now tap the board to preview where it goes.', tone: '', c };
     const gs = ghostState();
-    if (gs.res.ok) return { main: '✓ This spot works', sub: S.hintMsg || 'Press “Place piece”, or tap the piece again.', tone: 'ok', c };
-    return { main: '✗ Not here', sub: S.sel.noFit ? 'This piece does not fit anywhere right now. Try a different piece.' : REASONS[gs.res.reason], tone: 'bad', c };
+    if (gs.res.ok) return { main: '✓ It fits here', sub: S.hintMsg || 'Press “Place piece”, or tap the piece again.', tone: 'ok', c };
+    return { main: '✗ Not here', sub: S.sel.noFit ? 'This piece does not fit anywhere right now. Try a different piece.'
+      : gs.res.reason === 'start' ? `Your first piece must cover your corner square (${CORNER_NAME[c]}).` : REASONS[gs.res.reason], tone: 'bad', c };
   }
   function renderStatus() {
     const st = statusInfo(), el = $('#status');
@@ -625,8 +723,10 @@
       const left = E.remaining(g, c);
       const isMe = S.online && S.online.lobby && !isShared(c) && S.online.seatForColor(c).owner === S.online.myKey;
       el.innerHTML = `<span class="chip"></span><div><p class="sc-name">${esc(controllerName(c))}${isMe ? ' (you)' : ''}<span class="sr"> plays ${COLORS[c].name}</span></p>
-        <p class="sc-left">${COLORS[c].name}: ${g.out[c] ? '<span class="sc-out">done</span>, ' : ''}${left} left${g.turn === c && !S.over ? ' · <b>turn</b>' : ''}</p></div>`;
+        <p class="sc-left">${isCompact() ? (g.out[c] ? '<span class="sc-out">done</span>' : left + ' left')
+          : `${COLORS[c].name}: ${g.out[c] ? '<span class="sc-out">done</span>, ' : ''}${left} left${g.turn === c && !S.over ? ' · <b>turn</b>' : ''}`}</p></div>`;
       paintChip($('.chip', el), c);
+      el.style.borderLeftColor = isCompact() ? FILL[c] : '';
       box.appendChild(el);
     }
   }
@@ -640,7 +740,7 @@
     tray.innerHTML = '';
     const active = myTurn() && g.turn === c;
     const fits = active ? fittingPieces() : null;
-    $('#tray-title').textContent = S.online && !S.online.myColors().length ? `Watching · ${COLORS[c].name} pieces left: ${list.length}` : `${COLORS[c].name} pieces left: ${list.length}`;
+    $('#tray-title').textContent = (S.online && !S.online.myColors().length ? 'Watching · ' : '') + `${COLORS[c].name} pieces · ${list.length} left`;
     for (const p of list) {
       const b = document.createElement('button');
       const noFit = fits && !fits.has(p);
@@ -651,10 +751,12 @@
       b.innerHTML = pieceSvg(PIECES[p].base, c, 5, true);
       b.addEventListener('click', () => selectPiece(p));
       tray.appendChild(b);
+      if (isCompact() && S.sel && S.sel.p === p && b.scrollIntoView) b.scrollIntoView({ inline: 'nearest', block: 'nearest' });
     }
   }
   function renderHand() {
     const active = myTurn();
+    $('#screen-game').dataset.mine = active ? '1' : '0';
     $('#btn-rotate').disabled = !(active && S.sel);
     $('#btn-flip').disabled = !(active && S.sel);
     $('#btn-place').disabled = !(active && S.sel && S.cursor);
@@ -671,14 +773,26 @@
 
   $('#btn-rotate').onclick = rotate; $('#btn-flip').onclick = flip;
   $('#btn-place').onclick = placeNow; $('#btn-hint').onclick = hint;
-  $('#dpad-up').onclick = () => moveCursor(0, -1);
-  $('#dpad-down').onclick = () => moveCursor(0, 1);
-  $('#dpad-left').onclick = () => moveCursor(-1, 0);
-  $('#dpad-right').onclick = () => moveCursor(1, 0);
+  function holdRepeat(btn, fn) { // tap = one square; press and hold = keep moving
+    let t1 = null, t2 = null;
+    const stop = () => { clearTimeout(t1); clearInterval(t2); t1 = t2 = null; };
+    btn.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || btn.disabled) return;
+      fn(false); stop();
+      t1 = setTimeout(() => { t2 = setInterval(() => { if (btn.disabled) stop(); else fn(true); }, 110); }, 420);
+    });
+    ['pointerup', 'pointerleave', 'pointercancel', 'blur'].forEach((ev) => btn.addEventListener(ev, stop));
+    btn.addEventListener('click', (e) => { if (e.detail === 0) fn(false); }); // keyboard (Enter/Space)
+    btn.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+  holdRepeat($('#dpad-up'), (q) => moveCursor(0, -1, q));
+  holdRepeat($('#dpad-down'), (q) => moveCursor(0, 1, q));
+  holdRepeat($('#dpad-left'), (q) => moveCursor(-1, 0, q));
+  holdRepeat($('#dpad-right'), (q) => moveCursor(1, 0, q));
   $('#hand-toggle').onclick = () => {
     S.handHidden = !S.handHidden;
     $('#hand-body').hidden = S.handHidden;
-    $('#hand-toggle').textContent = S.handHidden ? 'Show controls' : 'Hide controls';
+    $('#hand-toggle').innerHTML = S.handHidden ? 'Show<span class="long"> controls</span>' : 'Hide<span class="long"> controls</span>';
     $('#hand-toggle').setAttribute('aria-expanded', String(!S.handHidden));
   };
 
@@ -701,6 +815,7 @@
   }
   function finish() {
     if (S.over) return;
+    autoWholeBoard();
     S.over = true; S.humanTurn = false;
     const rows = results();
     const secs = Math.round((Date.now() - S.start) / 1000);
@@ -1036,6 +1151,7 @@
     const mine = S.justPlaced; S.justPlaced = false;
     S.game = S.online.game;
     S.sel = null; S.cursor = null; S.locked = false; S.humanTurn = false; S.hintMsg = '';
+    autoWholeBoard();
     if (!m.pass && !reducedMotion()) { S.anim = { cells: m.cells, t0: performance.now() }; animate(); }
     renderOnlineBanner(); renderAll();
     const who = isShared(m.color) ? 'The shared colour' : config.seats[currentSeatIndex(m.color)].name;
@@ -1108,7 +1224,11 @@
     store.set('config', config); startGame();
   };
   $('#game-settings').onclick = () => { initSettingsUi(); openDlg('dlg-settings'); };
-  $('#game-menu').onclick = () => {
+  $('#gm-settings').onclick = () => { $('#dlg-menu').close(); initSettingsUi(); openDlg('dlg-settings'); };
+  $('#gm-help').onclick = () => { $('#dlg-menu').close(); openDlg('dlg-help'); };
+  $('#gm-leave').onclick = () => { $('#dlg-menu').close(); leaveGame(); };
+  $('#game-menu').onclick = () => openDlg('dlg-menu');
+  function leaveGame() {
     if (S.online) {
       if (!S.over && !confirm('Leave this online game? The computer will take over your colours.')) return;
       leaveOnline(); show('menu'); return;

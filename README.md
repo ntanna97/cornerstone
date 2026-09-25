@@ -17,6 +17,12 @@ Built to be comfortable for older players and anyone with low vision.
 - Plain-language reasons when a move isn't allowed ("It touches one of your own pieces along a side...")
 - Full keyboard play, screen-reader announcements, optional read-aloud turns
 - Board zoom up to 230%, reduce-movement option
+- On phones and tablets the whole game fits on one screen: board, your pieces and the controls are
+  visible together, with no scrolling during your turn
+- Picking a piece zooms in on it (28-44px squares) and places it where it fits; after your move the
+  view zooms back out so you can see everyone else's moves
+- Taps don't need to be precise: tap near where you want a piece and it snaps to the closest spot it
+  fits (turning it if needed). You can also drag the piece with a finger, or hold an arrow to keep moving
 
 ## Play modes
 

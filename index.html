@@ -104,9 +104,10 @@
     <!-- GAME -->
     <section id="screen-game" class="screen game" hidden aria-label="Game">
       <header class="topbar">
-        <button class="btn small" id="game-menu">Menu</button>
+        <button class="btn small" id="game-menu"><span class="ico" aria-hidden="true">☰</span> <span class="lbl">Menu</span></button>
         <p class="brand" aria-hidden="true">Cornerstone</p>
         <button class="btn small" id="game-settings">Settings</button>
+        <button class="btn small viewtoggle" id="view-toggle" type="button"></button>
       </header>
       <p id="online-banner" class="hint-line online-banner" hidden role="status"></p>
 
@@ -119,9 +120,11 @@
               <p id="status-sub" class="status-sub"></p>
             </div>
           </div>
-          <div id="boardwrap" class="boardwrap">
-            <canvas id="board" tabindex="0" role="application"
-              aria-label="Game board, 20 by 20 squares. With a piece chosen, use the arrow keys to move it, R to rotate, F to flip, and Enter to place it."></canvas>
+          <div class="boardbox">
+            <div id="boardwrap" class="boardwrap">
+              <canvas id="board" tabindex="0" role="application"
+                aria-label="Game board, 20 by 20 squares. With a piece chosen, tap near where you want it, drag it, or use the arrow keys to move it. R rotates, F flips, Enter places it."></canvas>
+            </div>
           </div>
           <div class="zoombar">
             <button class="btn small" id="zoom-out">Smaller board</button>
@@ -134,9 +137,6 @@
           <div id="scoreboard" class="scoreboard" aria-label="Squares left for each colour"></div>
 
           <div class="hand" id="hand">
-            <div class="hand-head">
-              <button class="btn small" id="hand-toggle" aria-expanded="true" aria-controls="hand-body">Hide controls</button>
-            </div>
             <div id="hand-body" class="hand-body">
               <div class="dpad" role="group" aria-label="Move the selected piece one square at a time">
                 <button class="btn dpad-btn dpad-up" id="dpad-up" aria-label="Move piece up">▲</button>
@@ -145,16 +145,19 @@
                 <button class="btn dpad-btn dpad-down" id="dpad-down" aria-label="Move piece down">▼</button>
               </div>
               <div class="handbtns">
-                <button class="btn" id="btn-rotate"><span aria-hidden="true">⟳</span> Rotate</button>
-                <button class="btn" id="btn-flip"><span aria-hidden="true">⇋</span> Flip</button>
+                <button class="btn" id="btn-rotate"><span class="ico" aria-hidden="true">⟳</span> <span class="lbl">Rotate</span></button>
+                <button class="btn" id="btn-flip"><span class="ico" aria-hidden="true">⇋</span> <span class="lbl">Flip</span></button>
                 <button class="btn primary place" id="btn-place">Place piece</button>
               </div>
-              <button class="btn small" id="btn-hint">Suggested move</button>
+            </div>
+            <div class="hand-extra">
+              <button class="btn small" id="hand-toggle" type="button" aria-expanded="true" aria-controls="hand-body">Hide<span class="long"> controls</span></button>
+              <button class="btn small" id="btn-hint" type="button">Suggest<span class="long"> a move</span></button>
             </div>
           </div>
 
           <div class="tray">
-            <h2 id="tray-title" class="tray-title"></h2>
+            <div class="tray-head"><h2 id="tray-title" class="tray-title"></h2></div>
             <div id="tray" class="trayGrid"></div>
           </div>
         </aside>
@@ -188,6 +191,18 @@
       <h3>Keyboard</h3>
       <p>Click the board, then use the <b>arrow keys</b> to move a piece, <b>R</b> to rotate, <b>F</b> to flip, <b>[</b> and <b>]</b> to change piece, and <b>Enter</b> to place it.</p>
       <div class="row end"><button class="btn primary" data-close>Close</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-menu" aria-labelledby="menu-dlg-title">
+    <div class="dlg">
+      <h2 id="menu-dlg-title">Menu</h2>
+      <div class="stack">
+        <button class="btn primary big" data-close>Back to the game</button>
+        <button class="btn big" id="gm-settings">Settings: text size, colours, sound</button>
+        <button class="btn big" id="gm-help">How to play</button>
+        <button class="btn big" id="gm-leave">Leave this game</button>
+      </div>
     </div>
   </dialog>
 
