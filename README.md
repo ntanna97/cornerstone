@@ -9,9 +9,12 @@ Built to be comfortable for older players and anyone with low vision.
 - Atkinson Hyperlegible typeface (designed by the Braille Institute for low-vision readers)
 - Three text sizes, plus a high-contrast mode
 - Colour is never the only signal: every colour has its own shape (circle, triangle, square, diamond)
-- Large tap targets, a "Place piece" confirm step, and "Take back my last move"
+- Large tap targets and a "Place piece" confirm step
+- On-screen ▲ ◀ ▶ ▼ buttons to move a selected piece one square at a time, no dragging required
+- A collapsible bottom control panel ("Hide controls") to free up screen space on small phones
+- A ghost preview of the selected piece appears on the board immediately, before you tap anywhere
+- "Show me where I can play" markers and a "Suggested move" button
 - Plain-language reasons when a move isn't allowed ("It touches one of your own pieces along a side...")
-- "Show me where I can play" markers and a "Show me a move" hint
 - Full keyboard play, screen-reader announcements, optional read-aloud turns
 - Board zoom up to 230%, reduce-movement option
 

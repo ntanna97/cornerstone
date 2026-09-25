@@ -35,8 +35,27 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const S = api.S;
   if (!S.humanTurn) throw new Error('should be human turn (blue first)');
   if (w.document.querySelectorAll('#tray .piece').length !== 21) throw new Error('21 pieces expected');
-  // illegal placement shows a reason
+  if ($('#btn-undo') || $('#hand-preview')) throw new Error('undo button / piece showcase should have been removed');
+  // selecting a piece from the tray should immediately drop a ghost cursor on the board, no board tap needed
   [...w.document.querySelectorAll('#tray .piece')][0].click();
+  if (!S.sel) throw new Error('selecting a tray piece should set S.sel');
+  if (!S.cursor) throw new Error('selecting a piece should auto-place a ghost cursor on the board');
+  const before = { x: S.cursor.x, y: S.cursor.y };
+  // the on-screen d-pad should move that cursor one square at a time and lock it
+  if ($('#dpad-right').disabled) throw new Error('dpad-right should be enabled once a piece is selected');
+  $('#dpad-right').click();
+  if (S.cursor.x !== Math.min(19, before.x + 1) || S.cursor.y !== before.y) throw new Error('dpad-right did not move the cursor by one square');
+  if (!S.locked) throw new Error('moving via the dpad should lock the cursor');
+  $('#dpad-down').click();
+  if (S.cursor.y !== Math.min(19, before.y + 1)) throw new Error('dpad-down did not move the cursor');
+  // hide/show the bottom control panel
+  if ($('#hand-body').hidden) throw new Error('controls should start visible');
+  $('#hand-toggle').click();
+  if (!$('#hand-body').hidden) throw new Error('hand-toggle should hide the controls');
+  if (!/show/i.test($('#hand-toggle').textContent)) throw new Error('toggle label should now say Show controls');
+  $('#hand-toggle').click();
+  if ($('#hand-body').hidden) throw new Error('hand-toggle should show the controls again');
+  // illegal placement shows a reason
   $('#board').dispatchEvent(new w.MouseEvent('click', { clientX: 0, clientY: 0 }));
   if (!/first piece/.test($('#status-sub').textContent)) throw new Error('expected first-piece reason, got: ' + $('#status-sub').textContent);
   // play the whole game through the UI using the hint button
@@ -69,7 +88,6 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     while (!api.S.over && t < 80) {
       for (let i = 0; i < 800 && !api.S.humanTurn && !api.S.over; i++) await sleep(10);
       if (api.S.over) break;
-      if (t === 2) { $('#btn-undo').click(); await sleep(30); }
       $('#btn-hint').click(); $('#btn-place').click(); t++;
     }
     for (let i = 0; i < 1500 && !api.S.over; i++) await sleep(20);

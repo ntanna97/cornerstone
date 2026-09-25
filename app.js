@@ -36,9 +36,9 @@
   // ---------- state ----------
   const S = {
     game: null, sel: null, cursor: null, locked: false, hintMsg: '', banner: '',
-    snaps: [], token: 0, running: false, humanTurn: false, viewColor: 0,
+    token: 0, running: false, humanTurn: false, viewColor: 0,
     start: 0, zoom: 1, cell: 24, anim: null, over: false,
-    online: null, onlineBotTimer: null, onlineName: ''
+    online: null, onlineBotTimer: null, onlineName: '', handHidden: false
   };
   const ZOOMS = [1, 1.4, 1.8, 2.3];
   let zoomIdx = 0;
@@ -230,7 +230,7 @@
   function startGame() {
     S.token++;
     const g = E.newGame(); g.meta = { sharedCount: 0, moves: 0, last: null };
-    S.game = g; S.sel = null; S.cursor = null; S.locked = false; S.snaps = []; S.hintMsg = ''; S.banner = '';
+    S.game = g; S.sel = null; S.cursor = null; S.locked = false; S.hintMsg = ''; S.banner = '';
     S.over = false; S.running = false; S.humanTurn = false; S.start = Date.now(); S.anim = null;
     const firstHuman = [0, 1, 2, 3].find((c) => !isShared(c) && seatFor(c).type === 'human');
     S.viewColor = firstHuman === undefined ? 0 : firstHuman;
@@ -280,7 +280,6 @@
   }
   function beginHumanTurn(c) {
     S.humanTurn = true; S.viewColor = c; S.sel = null; S.cursor = null; S.locked = false; S.hintMsg = '';
-    S.snaps.push(E.cloneGame(S.game));
     renderAll();
     const seat = seatFor(c);
     const msg = isShared(c) ? `${seat.name}, it is your turn to play the shared colour, Green.` : `${seat.name}, it is your turn. You are ${COLORS[c].name}.`;
@@ -309,6 +308,10 @@
   function selectPiece(p) {
     if (!myTurn()) return;
     S.sel = { p, rot: 0, flip: false }; S.hintMsg = '';
+    if (!S.cursor) {
+      const fr = E.frontier(S.game, S.game.turn);
+      S.cursor = fr.length ? { x: fr[0][0], y: fr[0][1] } : { x: 10, y: 10 };
+    }
     snd.pick(); say(`Chosen: ${pieceLabel(p)}.`, false);
     renderAll();
   }
@@ -364,13 +367,17 @@
     snd.pick(); say(S.hintMsg);
     renderAll(); scrollToCursor();
   }
-  function undo() {
-    if (!myTurn() || S.snaps.length < 2) return;
-    S.token++; S.running = false;
-    S.snaps.pop(); const snap = S.snaps.pop();
-    S.game = E.cloneGame(snap); S.sel = null; S.cursor = null; S.locked = false;
-    say('Took back your last move.');
-    runTurns();
+  function moveCursor(dx, dy) {
+    if (!myTurn()) return;
+    if (!S.sel) { say('Choose a piece first, then move it.'); return; }
+    if (!S.cursor) {
+      const f = E.frontier(S.game, S.game.turn)[0];
+      S.cursor = f ? { x: f[0], y: f[1] } : { x: 10, y: 10 };
+    } else {
+      S.cursor = { x: Math.max(0, Math.min(N - 1, S.cursor.x + dx)), y: Math.max(0, Math.min(N - 1, S.cursor.y + dy)) };
+    }
+    S.locked = true; renderAll(); scrollToCursor();
+    const gs = ghostState(); if (gs && !gs.res.ok) snd.no();
   }
 
   // ---------- board input ----------
@@ -403,10 +410,7 @@
     if (arrows[k]) {
       e.preventDefault();
       if (!S.sel) { say('Choose a piece first, then move it with the arrow keys.'); return; }
-      if (!S.cursor) { const f = E.frontier(S.game, S.game.turn)[0]; S.cursor = f ? { x: f[0], y: f[1] } : { x: 10, y: 10 }; }
-      else S.cursor = { x: Math.max(0, Math.min(N - 1, S.cursor.x + arrows[k][0])), y: Math.max(0, Math.min(N - 1, S.cursor.y + arrows[k][1])) };
-      S.locked = true; renderAll(); scrollToCursor();
-      const gs = ghostState(); if (gs && !gs.res.ok) snd.no();
+      moveCursor(arrows[k][0], arrows[k][1]);
     } else if (k === 'r' || k === 'R') { e.preventDefault(); rotate(); }
     else if (k === 'f' || k === 'F') { e.preventDefault(); flip(); }
     else if (k === 'Enter' || k === ' ') { e.preventDefault(); placeNow(); }
@@ -607,16 +611,13 @@
     }
   }
   function renderHand() {
-    const g = S.game, active = myTurn(), c = g.turn;
-    const pv = $('#hand-preview');
-    if (active && S.sel) pv.innerHTML = pieceSvg(E.transform(S.sel.p, S.sel.rot, S.sel.flip), c, 5, true);
-    else pv.innerHTML = active ? 'Pick a piece' : (S.over ? 'Finished' : 'Waiting');
+    const active = myTurn();
     $('#btn-rotate').disabled = !(active && S.sel);
     $('#btn-flip').disabled = !(active && S.sel);
     $('#btn-place').disabled = !(active && S.sel && S.cursor);
     $('#btn-hint').disabled = !active;
-    $('#btn-undo').hidden = !!S.online;
-    $('#btn-undo').disabled = !(active && S.snaps.length >= 2);
+    const canMove = active && S.sel;
+    ['#dpad-up', '#dpad-down', '#dpad-left', '#dpad-right'].forEach((sel) => { $(sel).disabled = !canMove; });
   }
   function renderAll() {
     if (!S.game) return;
@@ -626,7 +627,17 @@
   const esc = (s) => String(s).replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
 
   $('#btn-rotate').onclick = rotate; $('#btn-flip').onclick = flip;
-  $('#btn-place').onclick = placeNow; $('#btn-hint').onclick = hint; $('#btn-undo').onclick = undo;
+  $('#btn-place').onclick = placeNow; $('#btn-hint').onclick = hint;
+  $('#dpad-up').onclick = () => moveCursor(0, -1);
+  $('#dpad-down').onclick = () => moveCursor(0, 1);
+  $('#dpad-left').onclick = () => moveCursor(-1, 0);
+  $('#dpad-right').onclick = () => moveCursor(1, 0);
+  $('#hand-toggle').onclick = () => {
+    S.handHidden = !S.handHidden;
+    $('#hand-body').hidden = S.handHidden;
+    $('#hand-toggle').textContent = S.handHidden ? 'Show controls' : 'Hide controls';
+    $('#hand-toggle').setAttribute('aria-expanded', String(!S.handHidden));
+  };
 
   // ---------- game over ----------
   function results() {

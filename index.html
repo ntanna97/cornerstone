@@ -128,13 +128,22 @@
           <div id="scoreboard" class="scoreboard" aria-label="Squares left for each colour"></div>
 
           <div class="hand" id="hand">
-            <div class="preview" id="hand-preview" aria-hidden="true"></div>
-            <div class="handbtns">
-              <button class="btn" id="btn-rotate"><span aria-hidden="true">⟳</span> Rotate</button>
-              <button class="btn" id="btn-flip"><span aria-hidden="true">⇋</span> Flip</button>
-              <button class="btn primary place" id="btn-place">Place piece</button>
-              <button class="btn small" id="btn-hint">Show me a move</button>
-              <button class="btn small" id="btn-undo">Take back my last move</button>
+            <div class="hand-head">
+              <button class="btn small" id="hand-toggle" aria-expanded="true" aria-controls="hand-body">Hide controls</button>
+            </div>
+            <div id="hand-body" class="hand-body">
+              <div class="dpad" role="group" aria-label="Move the selected piece one square at a time">
+                <button class="btn dpad-btn dpad-up" id="dpad-up" aria-label="Move piece up">▲</button>
+                <button class="btn dpad-btn dpad-left" id="dpad-left" aria-label="Move piece left">◀</button>
+                <button class="btn dpad-btn dpad-right" id="dpad-right" aria-label="Move piece right">▶</button>
+                <button class="btn dpad-btn dpad-down" id="dpad-down" aria-label="Move piece down">▼</button>
+              </div>
+              <div class="handbtns">
+                <button class="btn" id="btn-rotate"><span aria-hidden="true">⟳</span> Rotate</button>
+                <button class="btn" id="btn-flip"><span aria-hidden="true">⇋</span> Flip</button>
+                <button class="btn primary place" id="btn-place">Place piece</button>
+              </div>
+              <button class="btn small" id="btn-hint">Suggested move</button>
             </div>
           </div>
 
@@ -165,7 +174,7 @@
       <h3>Playing a piece</h3>
       <ol class="rules">
         <li>Choose a piece from the list.</li>
-        <li>Tap or click the board to preview it. Use <b>Rotate</b> and <b>Flip</b> to turn it.</li>
+        <li>Tap or click the board to preview it, or use the <b>▲ ◀ ▶ ▼</b> buttons to move it one square at a time. Use <b>Rotate</b> and <b>Flip</b> to turn it.</li>
         <li>Press <b>Place piece</b>. You can also tap the previewed piece again.</li>
       </ol>
       <h3>Scoring</h3>
