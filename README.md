@@ -17,6 +17,14 @@ Built to be comfortable for older players and anyone with low vision.
 - Plain-language reasons when a move isn't allowed ("It touches one of your own pieces along a side...")
 - Full keyboard play, screen-reader announcements, optional read-aloud turns
 - Board zoom up to 230%, reduce-movement option
+- On phones the board uses the full width and nothing scrolls. Below it, one panel shows your pieces;
+  once you pick one it shows the controls (arrows, Rotate, Flip, Change piece, Place). The panel never
+  changes size, so the board never moves
+- The screen only changes when you ask: nothing zooms by itself. Picking a piece shows it on the board,
+  in a spot where it fits, with a thick gold border (the same gold as its tile). The zoom button is
+  there if you want bigger squares, and your choice is remembered
+- Taps don't need to be precise: tap near where you want a piece and it snaps to the closest spot it
+  fits (turning it if needed). You can also drag the piece with a finger, or hold an arrow to keep moving
 
 ## Play modes
 

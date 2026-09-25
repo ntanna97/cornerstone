@@ -91,7 +91,7 @@ legend{font-weight:700;padding:0;margin-bottom:.5rem;font-size:1.05rem}
 .chip svg{width:70%;height:70%}
 
 .boardwrap{background:#fff;border:var(--bw) solid var(--ink);border-radius:var(--r);overflow:auto;max-height:80vh;padding:6px;-webkit-overflow-scrolling:touch}
-#board{display:block;margin:0 auto;touch-action:manipulation;cursor:pointer;border-radius:6px}
+#board{display:block;margin:0 auto;touch-action:none;cursor:pointer;border-radius:6px}
 .zoombar{display:flex;align-items:center;justify-content:center;gap:.75rem;flex-wrap:wrap}
 .zoomlabel{color:#fff;font-weight:700}
 
@@ -176,3 +176,78 @@ th{font-size:.85rem}
 .online-banner.ok{background:rgba(11,107,46,.85);border-color:#fff}
 .piece.nofit{opacity:.38;background:repeating-linear-gradient(45deg,#fff,#fff 6px,#eef1f4 6px,#eef1f4 12px)}
 .seat .you{display:inline-block;background:var(--gold);border:2px solid var(--ink);border-radius:8px;padding:0 .4rem;font-size:.8rem;margin-left:.3rem}
+
+/* ---------- touch-friendly basics ---------- */
+button{touch-action:manipulation;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none} /* no double-tap zoom when tapping arrows quickly */
+.boardbox{position:relative;min-width:0;min-height:0}
+.viewtoggle{display:none}
+.hand-extra{display:flex;gap:.5rem;justify-content:center;flex-wrap:wrap}
+.tray-head{margin-bottom:.5rem}
+.tray-head .tray-title{margin:0}
+.short{display:none}
+
+/* ---------- phones and tablets: everything on one screen, nothing to scroll during your turn ---------- */
+#btn-change,#btn-hint2{display:none}
+@media (max-width: 999px) {
+  .long{display:none} .short{display:inline}
+  /* The board gets the full width. Below it, one fixed-height panel shows EITHER your pieces (pick one)
+     OR the controls for the piece you picked. Fixed height = the board never moves or changes size. */
+  .screen.game{max-width:none;padding:.4rem .5rem;padding-bottom:max(.4rem, env(safe-area-inset-bottom));
+    height:100vh;height:100dvh;display:grid;gap:.3rem;
+    grid-template-columns:auto minmax(0,1fr) auto;
+    grid-template-rows:auto auto auto minmax(0,1fr) 6.8rem;
+    grid-template-areas:"menu status view" "banner banner banner" "scores scores scores" "board board board" "dock dock dock"}
+  .screen.game .topbar,.screen.game .layout,.screen.game .boardcol,.screen.game .sidecol{display:contents}
+  .screen.game .brand,#game-settings,.zoombar,#hand-toggle{display:none}
+  #game-menu.btn,#view-toggle.btn{align-self:stretch;width:3.6rem;min-height:0;padding:.15rem .1rem;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.05rem;box-shadow:0 3px 0 var(--ink)}
+  #game-menu{grid-area:menu} #view-toggle{grid-area:view}
+  #game-menu .ico,#view-toggle .ico{font-size:1.15rem;line-height:1}
+  #game-menu .lbl,#view-toggle .lbl{font-size:.62rem;line-height:1.1;white-space:nowrap}
+  #online-banner{grid-area:banner;margin:0;padding:.3rem .6rem;font-size:.8rem}
+  #status{grid-area:status;padding:.3rem .55rem;min-width:0;border-radius:12px;height:3.7rem;align-items:center} /* fixed height: the board never jumps */
+  #status .chip{display:none}
+  #status > div{min-width:0}
+  .status-main{font-size:.95rem;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .status-sub{font-size:.78rem;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  /* scores: name, then squares left */
+  .scoreboard{grid-area:scores;grid-template-columns:repeat(4,minmax(0,1fr));gap:.3rem}
+  .sc{padding:.15rem .35rem .15rem .45rem;border-radius:9px;display:block;border-left-width:.5rem}
+  .sc .chip{display:none}
+  .sc > div{min-width:0}
+  .sc-name{font-size:.72rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2}
+  .sc-left{font-size:.72rem;white-space:nowrap;line-height:1.2}
+  .sc.now{box-shadow:0 0 0 3px var(--gold),0 0 0 5px var(--ink)}
+  .boardbox{grid-area:board}
+  .boardwrap{height:100%;max-height:none;padding:4px;border-radius:12px}
+  /* the panel, state 1: your pieces */
+  .tray{grid-area:dock;padding:.35rem;border-radius:12px;display:flex;flex-direction:column;gap:.3rem;min-height:0;overflow:hidden}
+  .tray-head{margin:0;display:flex;align-items:center;gap:.4rem}
+  .tray-title{font-size:.85rem;flex:1 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #btn-hint2{display:inline-block;min-height:2.3rem;padding:.1rem .7rem;font-size:.82rem;white-space:nowrap;flex:none}
+  .trayGrid{display:flex;overflow-x:auto;gap:.4rem;padding:2px 2px .25rem;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;flex:1 1 auto;align-items:center}
+  .piece{flex:0 0 3.4rem;height:3.4rem;padding:.2rem;scroll-snap-align:start}
+  /* the panel, state 2: controls for the picked piece */
+  .hand{grid-area:dock;padding:.4rem;border-radius:12px;display:none;gap:.4rem;
+    grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:1fr 1fr;
+    grid-template-areas:"l l u u d d r r rot rot flip flip" "chg chg chg chg hint hint hint place place place place place"}
+  .screen.game[data-picked="1"] .hand{display:grid}
+  .screen.game[data-picked="1"] .tray{display:none}
+  .hand-body,.hand .dpad,.hand .handbtns,.hand-extra{display:contents}
+  #dpad-left{grid-area:l}#dpad-up{grid-area:u}#dpad-down{grid-area:d}#dpad-right{grid-area:r}
+  #btn-rotate{grid-area:rot}#btn-flip{grid-area:flip}#btn-place{grid-area:place}#btn-change{grid-area:chg;display:block}#btn-hint{grid-area:hint}
+  .hand .btn{min-height:0;min-width:0;padding:.1rem .15rem;font-size:.85rem;line-height:1.1}
+  .dpad-btn{font-size:1.35rem!important}
+  #btn-rotate,#btn-flip{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0}
+  #btn-rotate .ico,#btn-flip .ico{font-size:1.2rem;line-height:1}
+  #btn-rotate .lbl,#btn-flip .lbl{font-size:.62rem;line-height:1.1}
+  #btn-place{font-size:1rem}
+}
+@media (max-width: 999px) and (orientation: landscape) and (max-height: 520px) { /* phone turned sideways: fall back to a scrolling page */
+  .screen.game{height:auto}
+  .boardbox{height:88vh}
+}
+@media (max-width: 999px) { /* extra-large text: let the status wrap instead of cutting it off */
+  html[data-text="xl"] .status-main{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.15}
+  html[data-text="xl"] .status-sub{-webkit-line-clamp:1}
+  html[data-text="xl"] .hand .btn{font-size:.74rem}
+}

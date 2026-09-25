@@ -440,7 +440,10 @@
         case 'beat':
           if (!self.lobby || p.rev > self.lobby.rev) { throttled('behind'); break; }
           if (!self.started || p.gid !== self.lobby.gameId) break;
-          if (p.n > self.moveN) throttled('behind');
+          if (p.n > self.moveN) { // probably just a move still on its way: give it a moment before asking for a catch-up
+            const want = p.n, gid = p.gid;
+            later(() => { if (self.started && self.lobby.gameId === gid && self.moveN < want) throttled('behind'); }, T.gapMs);
+          }
           else if (p.n === self.moveN && p.h !== fingerprint(self.game, self.moveN)) { emit('debug', 'beat-mismatch n=' + p.n); throttled('desync'); }
           else if (p.n < self.moveN) for (let k = p.n + 1; k <= self.moveN; k++) if (log[k]) transport.send('move', log[k]); // host missed these
           break;
