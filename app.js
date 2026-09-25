@@ -813,13 +813,19 @@
     room.on('move', onOnlineMove);
     room.on('resume', () => onlineTick());
     room.on('rematch', () => { mirrorConfigFromLobby(room); S.game = null; S.over = false; renderLobby(); show('lobby'); });
-    mirrorConfigFromLobby(room);
+    if (room.lobby) mirrorConfigFromLobby(room);
     renderLobby();
     show('lobby');
   }
   function renderLobby() {
     const room = S.online; if (!room) return;
     $('#lobby-code').textContent = room.code;
+    if (!room.lobby) { // joined the channel but haven't heard from the host yet
+      $('#lobby-seats').innerHTML = '';
+      $('#lobby-start').hidden = true;
+      $('#lobby-note').textContent = 'Connecting to the host…';
+      return;
+    }
     $$('input[name=lmode]').forEach((i) => { i.checked = +i.value === room.lobby.mode; i.disabled = !room.amHost(); });
     const box = $('#lobby-seats'); box.innerHTML = '';
     room.lobby.seats.forEach((seat, i) => {
