@@ -40,7 +40,7 @@
     start: 0, zoom: 1, cell: 24, anim: null, over: false,
     online: null, onlineBotTimer: null, onlineName: '', handHidden: false,
     connecting: false, announced: '', conn: 'ok', justPlaced: false, fit: null,
-    closeUp: false, autoZoomed: false, baseCell: 24, touchTapAt: 0
+    closeUp: !!settings.closeUp, baseCell: 24, touchTapAt: 0
   };
   const ZOOMS = [1, 1.4, 1.8, 2.3];
   let zoomIdx = 0;
@@ -283,6 +283,7 @@
   function beginHumanTurn(c) {
     S.humanTurn = true; S.viewColor = c; S.sel = null; S.cursor = null; S.locked = false; S.hintMsg = '';
     renderAll();
+    if (S.closeUp && isCompact()) centerOnMine(true);
     const seat = seatFor(c);
     const msg = isShared(c) ? `${seat.name}, it is your turn to play the shared colour, Green.` : `${seat.name}, it is your turn. You are ${COLORS[c].name}.`;
     say(msg);
@@ -296,7 +297,6 @@
     if (isShared(c)) g.meta.sharedCount++;
     g.turn = (c + 1) % 4;
     S.sel = null; S.cursor = null; S.locked = false; S.humanTurn = false; S.hintMsg = '';
-    autoWholeBoard();
     if (!reducedMotion()) { S.anim = { cells, t0: performance.now() }; animate(); }
     renderAll();
   }
@@ -347,7 +347,7 @@
       S.sel.noFit = true;
       snd.no(); say('This piece does not fit anywhere right now. Try a different piece.');
     }
-    autoCloseUp(); renderAll(); scrollToCursor();
+    renderAll(); scrollToCursor(true);
   }
   function ghostCells() {
     if (!S.sel || !S.cursor) return null;
@@ -401,7 +401,7 @@
     S.cursor = { x: mv.ox + Math.floor(w / 2), y: mv.oy + Math.floor(h / 2) }; S.locked = true;
     S.hintMsg = 'Here is one good move. Press Place piece to use it, or choose something else.';
     snd.pick(); say(S.hintMsg);
-    autoCloseUp(); renderAll(); scrollToCursor();
+    renderAll(); scrollToCursor(true);
   }
   function moveCursor(dx, dy, quiet) {
     if (!myTurn()) return;
@@ -515,7 +515,7 @@
       selectPiece(list[(i + (k === ']' ? 1 : -1) + list.length) % list.length]);
     }
   });
-  function scrollToCursor() { if (S.cursor) centerOn(S.cursor.x, S.cursor.y); }
+  function scrollToCursor(smooth) { if (S.cursor) centerOn(S.cursor.x, S.cursor.y, smooth); }
 
   // ---------- sizing ----------
   const isCompact = () => !!(window.matchMedia && window.matchMedia('(max-width: 999px)').matches);
@@ -539,26 +539,27 @@
     vt.innerHTML = `<span class="ico" aria-hidden="true">🔍</span> <span class="lbl">${S.closeUp ? 'Zoom out' : 'Zoom in'}</span>`;
     vt.setAttribute('aria-label', S.closeUp ? 'Show the whole board' : 'Zoom in on the board');
   }
-  function centerOn(x, y) {
+  function centerOn(x, y, smooth) {
     const wrap = $('#boardwrap'), cs = S.cell;
-    if (wrap.scrollWidth > wrap.clientWidth) wrap.scrollLeft = Math.max(0, (x + .5) * cs - wrap.clientWidth / 2);
-    if (wrap.scrollHeight > wrap.clientHeight) wrap.scrollTop = Math.max(0, (y + .5) * cs - wrap.clientHeight / 2);
+    const left = wrap.scrollWidth > wrap.clientWidth ? Math.max(0, (x + .5) * cs - wrap.clientWidth / 2) : wrap.scrollLeft;
+    const top = wrap.scrollHeight > wrap.clientHeight ? Math.max(0, (y + .5) * cs - wrap.clientHeight / 2) : wrap.scrollTop;
+    if (smooth && !reducedMotion() && wrap.scrollTo) wrap.scrollTo({ left, top, behavior: 'smooth' });
+    else { wrap.scrollLeft = left; wrap.scrollTop = top; }
   }
-  function centerOnMine() { // middle of my own pieces, or my corner if I haven't played yet
+  function centerOnMine(smooth) { // middle of my own pieces, or my corner if I haven't played yet
     const g = S.game, c = S.viewColor; let sx = 0, sy = 0, n = 0;
     for (let i = 0; i < g.board.length; i++) if (g.board[i] === c) { sx += i % N; sy += Math.floor(i / N); n++; }
-    if (n) centerOn(Math.round(sx / n), Math.round(sy / n)); else centerOn(COLORS[c].corner[0], COLORS[c].corner[1]);
+    if (n) centerOn(Math.round(sx / n), Math.round(sy / n), smooth); else centerOn(COLORS[c].corner[0], COLORS[c].corner[1], smooth);
   }
-  function setCloseUp(on, auto) {
+  // Zoom changes ONLY when the player presses the zoom button, and the choice is remembered.
+  // (The view never jumps by itself: that disorients people, especially older players.)
+  function setCloseUp(on) {
     if (S.closeUp === on) return;
-    S.closeUp = on; S.autoZoomed = !!(on && auto);
+    S.closeUp = on; settings.closeUp = on; store.set('settings', settings);
     fit(); draw();
     if (on) { if (S.cursor) scrollToCursor(); else centerOnMine(); }
   }
-  // Picking a piece on a small screen zooms in on it; after the move we zoom back out to show everyone's moves.
-  function autoCloseUp() { if (isCompact() && !S.closeUp && S.baseCell < 30) { S.closeUp = true; S.autoZoomed = true; fit(); } }
-  function autoWholeBoard() { if (S.closeUp) { S.closeUp = false; S.autoZoomed = false; fit(); } } // after every move: show everyone's moves
-  $('#view-toggle').onclick = () => { setCloseUp(!S.closeUp, false); renderAll(); if (S.closeUp) { if (S.cursor) scrollToCursor(); else centerOnMine(); } };
+  $('#view-toggle').onclick = () => { setCloseUp(!S.closeUp); renderAll(); if (S.closeUp) { if (S.cursor) scrollToCursor(); else centerOnMine(); } };
   if (window.ResizeObserver) { // the board's space changes when controls appear/disappear or the phone rotates
     let last = '';
     new ResizeObserver(() => {
@@ -596,7 +597,8 @@
     if (settings.shapes) glyphCanvas(c, cx, cy, cs * .2 * s);
     ctx.globalAlpha = 1;
   }
-  function outline(cells, colorOuter, colorInner, dash) {
+  function outline(cells, colorOuter, colorInner, dash, scale) {
+    const k = scale || 1;
     const cs = S.cell, set = new Set(cells.map(([x, y]) => x + ',' + y));
     const segs = [];
     for (const [x, y] of cells) {
@@ -610,8 +612,8 @@
       for (const [a, b, c2, d2] of segs) { ctx.moveTo(a * cs, b * cs); ctx.lineTo(c2 * cs, d2 * cs); }
       ctx.stroke(); ctx.setLineDash([]);
     };
-    stroke(colorOuter, Math.max(5, cs * .2), null);
-    stroke(colorInner, Math.max(2.5, cs * .1), dash);
+    stroke(colorOuter, Math.max(5, cs * .2) * k, null);
+    stroke(colorInner, Math.max(2.5, cs * .1) * k, dash);
   }
   function draw() {
     const g = S.game; if (!g) return;
@@ -676,8 +678,8 @@
       }
       const inb = gs.cells.filter(([x, y]) => x >= 0 && y >= 0 && x < N && y < N);
       if (inb.length) {
-        if (gs.res.ok) outline(inb, '#ffffff', '#0b6b2e', null);
-        else outline(inb, '#ffffff', '#a3121f', [cs * .2, cs * .14]);
+        if (gs.res.ok) outline(inb, '#14181f', '#ffd23f', null, 1.5);
+        else outline(inb, '#14181f', '#ff5a5f', [cs * .22, cs * .14], 1.5);
       }
     }
   }
@@ -815,7 +817,6 @@
   }
   function finish() {
     if (S.over) return;
-    autoWholeBoard();
     S.over = true; S.humanTurn = false;
     const rows = results();
     const secs = Math.round((Date.now() - S.start) / 1000);
@@ -1151,7 +1152,6 @@
     const mine = S.justPlaced; S.justPlaced = false;
     S.game = S.online.game;
     S.sel = null; S.cursor = null; S.locked = false; S.humanTurn = false; S.hintMsg = '';
-    autoWholeBoard();
     if (!m.pass && !reducedMotion()) { S.anim = { cells: m.cells, t0: performance.now() }; animate(); }
     renderOnlineBanner(); renderAll();
     const who = isShared(m.color) ? 'The shared colour' : config.seats[currentSeatIndex(m.color)].name;
@@ -1190,6 +1190,7 @@
     renderAll();
     if (fresh) {
       S.announced = key;
+      if (S.closeUp && isCompact()) centerOnMine(true);
       say(isShared(c) ? 'Your turn. You are playing the shared colour, Green.' : `Your turn. You are ${COLORS[c].name}.`);
       snd.turn();
     }
