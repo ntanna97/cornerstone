@@ -37,14 +37,18 @@
     <section id="screen-online" class="screen" hidden aria-labelledby="online-title">
       <div class="panel wide">
         <h2 id="online-title">Play online</h2>
-        <p id="online-status" class="hint-line" role="status">Connecting…</p>
+        <p id="online-status" class="hint-line" role="status"></p>
         <div class="stack" style="max-width:26rem">
-          <label>Your name<input type="text" id="online-name" maxlength="14" class="textbox"></label>
-          <button class="btn primary big" id="online-create">Create a room</button>
+          <label>Your name<input type="text" id="online-name" maxlength="14" class="textbox" autocomplete="nickname" placeholder="Type your name"></label>
         </div>
-        <p class="hint-line" style="margin-top:1.5rem">Or join a room someone already created:</p>
+        <div id="online-create-box">
+          <p class="hint-line" style="margin-top:1.25rem">Hosting? Create a room, then send the invite to your friends.</p>
+          <button class="btn primary big" id="online-create" style="max-width:26rem">Create a room</button>
+          <p class="hint-line" style="margin-top:1.5rem">Or join a room someone already created:</p>
+        </div>
+        <p id="online-joining" class="lead-sm" hidden></p>
         <div class="row">
-          <input type="text" id="online-code" maxlength="5" placeholder="ROOM CODE" class="textbox code" aria-label="Room code">
+          <input type="text" id="online-code" maxlength="5" placeholder="ROOM CODE" class="textbox code" aria-label="Room code" autocapitalize="characters" autocomplete="off">
           <button class="btn primary" id="online-join">Join room</button>
         </div>
         <p id="online-error" class="hint-line" role="alert"></p>
@@ -55,12 +59,14 @@
     <!-- ONLINE LOBBY -->
     <section id="screen-lobby" class="screen" hidden aria-labelledby="lobby-title">
       <div class="panel wide">
-        <h2 id="lobby-title">Room <span id="lobby-code"></span></h2>
-        <p class="hint-line">Share this code so friends can join. Everyone needs their own device.</p>
+        <h2 id="lobby-title">Your game room</h2>
+        <p class="hint-line">Friends join from their own phone, tablet or computer with this code:</p>
+        <p class="bigcode" aria-label="Room code"><span id="lobby-code"></span></p>
         <div class="row">
-          <button class="btn small" id="lobby-copy">Copy room code</button>
-          <button class="btn small" id="lobby-copy-link">Copy invite link</button>
+          <button class="btn primary" id="lobby-share">Share invite</button>
+          <button class="btn small" id="lobby-copy">Copy code</button>
         </div>
+        <p id="lobby-people" class="lead-sm" role="status" style="margin-top:1rem"></p>
         <fieldset class="modes" id="lobby-mode-group" style="margin-top:1.25rem">
           <legend>How many players?</legend>
           <label class="choice"><input type="radio" name="lmode" value="2"><span><b>2 players</b><small>Two colours each.</small></span></label>
@@ -239,7 +245,7 @@
   </dialog>
 
   <canvas id="confetti" aria-hidden="true"></canvas>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/dist/umd/supabase.js"></script>
   <script src="engine.js"></script>
   <script src="net.js"></script>
   <script src="supabase-transport.js"></script>

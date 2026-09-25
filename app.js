@@ -38,7 +38,8 @@
     game: null, sel: null, cursor: null, locked: false, hintMsg: '', banner: '',
     token: 0, running: false, humanTurn: false, viewColor: 0,
     start: 0, zoom: 1, cell: 24, anim: null, over: false,
-    online: null, onlineBotTimer: null, onlineName: '', handHidden: false
+    online: null, onlineBotTimer: null, onlineName: '', handHidden: false,
+    connecting: false, announced: '', conn: 'ok', justPlaced: false, fit: null
   };
   const ZOOMS = [1, 1.4, 1.8, 2.3];
   let zoomIdx = 0;
@@ -305,15 +306,46 @@
 
   // ---------- human actions ----------
   const myTurn = () => S.humanTurn && !S.over && S.game && seatFor(S.game.turn).type === 'human';
+  // Where a piece's centre goes for a given placement (the ghost is drawn centred on the cursor).
+  function cursorFor(o, ox, oy) {
+    const w = Math.max(...o.map((q) => q[0])) + 1, h = Math.max(...o.map((q) => q[1])) + 1;
+    return { x: ox + Math.floor(w / 2), y: oy + Math.floor(h / 2) };
+  }
+  // A legal spot for piece p: the first orientation that fits anywhere, at the spot nearest the current cursor.
+  function findSpot(p) {
+    const g = S.game, c = g.turn, fr = E.frontier(g, c);
+    for (let f = 0; f < 2; f++) for (let rot = 0; rot < 4; rot++) {
+      const o = E.transform(p, rot, !!f);
+      let best = null;
+      for (const [fx, fy] of fr) for (const [ax, ay] of o) {
+        const ox = fx - ax, oy = fy - ay;
+        if (!E.check(g, c, o.map(([x, y]) => [x + ox, y + oy])).ok) continue;
+        const cur = cursorFor(o, ox, oy);
+        const d = S.cursor ? Math.abs(cur.x - S.cursor.x) + Math.abs(cur.y - S.cursor.y) : 0;
+        if (!best || d < best.d) best = { rot, flip: !!f, cursor: cur, d };
+      }
+      if (best) return best;
+    }
+    return null;
+  }
+  function fittingPieces() { // which pieces can go somewhere this turn (cached per turn)
+    const g = S.game, key = g.meta.moves + ':' + g.turn + ':' + g.out.join('');
+    if (!S.fit || S.fit.key !== key) S.fit = { key, set: new Set(E.legalMoves(g, g.turn).map((m) => m.p)) };
+    return S.fit.set;
+  }
   function selectPiece(p) {
     if (!myTurn()) return;
     S.sel = { p, rot: 0, flip: false }; S.hintMsg = '';
-    if (!S.cursor) {
-      const fr = E.frontier(S.game, S.game.turn);
-      S.cursor = fr.length ? { x: fr[0][0], y: fr[0][1] } : { x: 10, y: 10 };
+    const spot = findSpot(p);
+    if (spot) {
+      S.sel.rot = spot.rot; S.sel.flip = spot.flip; S.cursor = spot.cursor; S.locked = true;
+      snd.pick(); say(`Chosen: ${pieceLabel(p)}. It is shown in a spot where it fits.`, false);
+    } else {
+      if (!S.cursor) { const fr = E.frontier(S.game, S.game.turn); S.cursor = fr.length ? { x: fr[0][0], y: fr[0][1] } : { x: 10, y: 10 }; }
+      S.sel.noFit = true;
+      snd.no(); say('This piece does not fit anywhere right now. Try a different piece.');
     }
-    snd.pick(); say(`Chosen: ${pieceLabel(p)}.`, false);
-    renderAll();
+    renderAll(); scrollToCursor();
   }
   function ghostCells() {
     if (!S.sel || !S.cursor) return null;
@@ -343,14 +375,15 @@
     if (!gs.res.ok) { snd.no(); say(REASONS[gs.res.reason]); return; }
     const c = S.game.turn, seat = seatFor(c), p = S.sel.p, size = PIECES[p].size;
     if (S.online) {
+      S.justPlaced = true;
       const res = S.online.proposeMove(c, p, gs.cells);
-      if (!res.ok) { snd.no(); say('That move was rejected by the room. Try again.'); return; }
+      if (!res.ok) { S.justPlaced = false; snd.no(); say("That move couldn't be sent. Please wait a moment and try again."); onlineTick(); return; }
     } else {
       commitMove(c, p, gs.cells);
     }
     snd.place();
     const cheers = size >= 5 ? ['Big one!', 'Nice, a five-square piece.', 'Solid move.'] : size >= 3 ? ['Nicely done.', 'Neat fit.', 'Good spot.'] : ['Tidy.', 'Sneaky little piece.', 'Good use of space.'];
-    say(cheers[Math.floor(Math.random() * cheers.length)] + ` ${seat.name} placed the ${PIECES[p].name}.`);
+    say(cheers[Math.floor(Math.random() * cheers.length)] + (S.online ? ` You placed the ${PIECES[p].name}.` : ` ${seat.name} placed the ${PIECES[p].name}.`));
     if (!S.online) runTurns();
   }
   function hint() {
@@ -559,9 +592,15 @@
     if (S.banner) return { main: S.banner, sub: '', tone: '', c: g.turn };
     const c = g.turn, seat = seatFor(c);
     if (!myTurn()) {
+      if (S.online && S.online.lobby) {
+        const s = S.online.seatForColor(c);
+        if (s.type === 'human' && s.owner && !S.online.isPresent(s.owner)) return { main: `Waiting for ${s.name} to reconnect…`, sub: 'Their seat is kept for a little while. After that, the computer plays for them.', tone: '', c };
+        if (s.type === 'human') return { main: `${s.name}'s turn`, sub: `Playing ${COLORS[c].name}. Waiting for their move…`, tone: '', c };
+      }
       return { main: `${seat.name} is thinking…`, sub: `Playing ${COLORS[c].name}`, tone: '', c };
     }
-    const who = isShared(c) ? `${seat.name}, play the shared colour` : (config.seats.filter((s) => s.type === 'human').length === 1 && seat.name === 'You' ? 'Your turn' : `${seat.name}, your turn`);
+    const who = S.online ? (isShared(c) ? 'Your turn: the shared colour' : 'Your turn')
+      : isShared(c) ? `${seat.name}, play the shared colour` : (config.seats.filter((s) => s.type === 'human').length === 1 && seat.name === 'You' ? 'Your turn' : `${seat.name}, your turn`);
     const head = `${who} (${COLORS[c].name})`;
     if (!S.sel) {
       const sub = g.first[c] ? 'Choose a piece. Your first piece must cover the marked corner.' : 'Choose a piece from the list.';
@@ -570,7 +609,7 @@
     if (!S.cursor) return { main: head, sub: 'Now tap the board to preview where it goes.', tone: '', c };
     const gs = ghostState();
     if (gs.res.ok) return { main: '✓ This spot works', sub: S.hintMsg || 'Press “Place piece”, or tap the piece again.', tone: 'ok', c };
-    return { main: '✗ Not here', sub: REASONS[gs.res.reason], tone: 'bad', c };
+    return { main: '✗ Not here', sub: S.sel.noFit ? 'This piece does not fit anywhere right now. Try a different piece.' : REASONS[gs.res.reason], tone: 'bad', c };
   }
   function renderStatus() {
     const st = statusInfo(), el = $('#status');
@@ -584,7 +623,8 @@
       const el = document.createElement('div');
       el.className = 'sc' + (g.turn === c && !S.over ? ' now' : '');
       const left = E.remaining(g, c);
-      el.innerHTML = `<span class="chip"></span><div><p class="sc-name">${esc(controllerName(c))}<span class="sr"> plays ${COLORS[c].name}</span></p>
+      const isMe = S.online && S.online.lobby && !isShared(c) && S.online.seatForColor(c).owner === S.online.myKey;
+      el.innerHTML = `<span class="chip"></span><div><p class="sc-name">${esc(controllerName(c))}${isMe ? ' (you)' : ''}<span class="sr"> plays ${COLORS[c].name}</span></p>
         <p class="sc-left">${COLORS[c].name}: ${g.out[c] ? '<span class="sc-out">done</span>, ' : ''}${left} left${g.turn === c && !S.over ? ' · <b>turn</b>' : ''}</p></div>`;
       paintChip($('.chip', el), c);
       box.appendChild(el);
@@ -599,10 +639,13 @@
     $('#tray-title').textContent = `${COLORS[c].name} pieces left: ${list.length}`;
     tray.innerHTML = '';
     const active = myTurn() && g.turn === c;
+    const fits = active ? fittingPieces() : null;
+    $('#tray-title').textContent = S.online && !S.online.myColors().length ? `Watching · ${COLORS[c].name} pieces left: ${list.length}` : `${COLORS[c].name} pieces left: ${list.length}`;
     for (const p of list) {
       const b = document.createElement('button');
-      b.className = 'piece'; b.type = 'button';
-      b.setAttribute('aria-label', pieceLabel(p));
+      const noFit = fits && !fits.has(p);
+      b.className = 'piece' + (noFit ? ' nofit' : ''); b.type = 'button';
+      b.setAttribute('aria-label', pieceLabel(p) + (noFit ? ', does not fit anywhere right now' : ''));
       b.setAttribute('aria-pressed', S.sel && S.sel.p === p ? 'true' : 'false');
       b.disabled = !active;
       b.innerHTML = pieceSvg(PIECES[p].base, c, 5, true);
@@ -649,7 +692,7 @@
       const left = cols.reduce((s, c) => s + E.remaining(g, c), 0);
       const pts = cols.reduce((s, c) => s + E.score(g, c), 0);
       const bonus = cols.filter((c) => E.remaining(g, c) === 0).map((c) => COLORS[c].name + (g.lastPiece[c] === 0 ? ' (+20)' : ' (+15)'));
-      rows.push({ seat: i, name: config.seats[i].name, type: config.seats[i].type, level: config.seats[i].level, cols, left, pts, bonus });
+      rows.push({ seat: i, name: config.seats[i].name, type: config.seats[i].type, level: config.seats[i].level, owner: config.seats[i].owner || null, cols, left, pts, bonus });
     }
     const best = Math.max(...rows.map((r) => r.pts));
     rows.forEach((r) => { r.win = r.pts === best; });
@@ -667,8 +710,11 @@
     hist.push({ t: Date.now(), mode: config.mode, secs, players: rows.map((r) => ({ name: r.name, type: r.type, level: r.level, colors: r.cols.map((c) => COLORS[c].name).join('+'), left: r.left, pts: r.pts, win: r.win })) });
     store.set('games', hist.slice(-200));
     renderAll();
-    const humanWon = winners.some((w) => w.type === 'human');
-    $('#over-title').textContent = winners.length > 1 ? 'It is a tie!' : (winners[0].type === 'human' && winners[0].name === 'You' ? 'You win!' : `${winners[0].name} wins!`);
+    const meWon = S.online ? winners.some((w) => w.owner === S.online.myKey) : null;
+    const humanWon = S.online ? meWon : winners.some((w) => w.type === 'human');
+    if (S.online) $('#over-title').textContent = winners.length > 1 ? (meWon ? "It's a tie, and you share the win!" : 'It is a tie!') : (meWon ? 'You win!' : `${winners[0].name} wins!`);
+    else $('#over-title').textContent = winners.length > 1 ? 'It is a tie!' : (winners[0].type === 'human' && winners[0].name === 'You' ? 'You win!' : `${winners[0].name} wins!`);
+    $('#over-again').textContent = S.online && !S.online.amHost() ? 'Back to the room' : 'Play again';
     $('#over-sub').textContent = `${Math.floor(secs / 60)} min ${secs % 60} sec. Highest score wins.`;
     $('#over-body').innerHTML = `<table><thead><tr><th scope="col">Player</th><th scope="col">Squares left</th><th scope="col">Score</th></tr></thead><tbody>` +
       rows.map((r) => `<tr class="${r.win ? 'win' : ''}"><td>${esc(r.name)}${r.win ? '<span class="tag">winner</span>' : ''}<br><small>${r.cols.map((c) => COLORS[c].name).join(' + ')}${r.bonus.length ? ' · all pieces placed ' + r.bonus.join(', ') : ''}</small></td><td>${r.left}</td><td>${r.pts}</td></tr>`).join('') +
@@ -679,7 +725,10 @@
   }
   $('#over-again').onclick = () => {
     $('#dlg-over').close();
-    if (S.online) { if (S.online.amHost()) S.online.rematch(); else say('Waiting for the host to set up a new game.'); }
+    if (S.online) {
+      if (S.online.amHost()) S.online.rematch();
+      else { renderLobby(); show('lobby'); $('#lobby-note').textContent = 'Waiting for the host to start a new game.'; }
+    }
     else startGame();
   };
   $('#over-menu').onclick = () => {
@@ -732,187 +781,279 @@
 
   // ---------- online play ----------
   let sbClient = null;
+  const ss = { // per-tab storage: survives a page reload, not shared between tabs
+    get(k) { try { return JSON.parse(sessionStorage.getItem('cornerstone.' + k)); } catch (e) { return null; } },
+    set(k, v) { try { if (v == null) sessionStorage.removeItem('cornerstone.' + k); else sessionStorage.setItem('cornerstone.' + k, JSON.stringify(v)); } catch (e) {} }
+  };
+  function tabKey() { // this tab's player id; a reload keeps it, so you get your own seat back
+    let k = ss.get('pid');
+    if (!k) { k = 'p-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); ss.set('pid', k); }
+    return k;
+  }
   function getSupabaseClient() {
-    if (typeof window.supabase === 'undefined' || !window.supabase.createClient) {
-      throw new Error('script-blocked');
-    }
+    if (typeof window.supabase === 'undefined' || !window.supabase.createClient) throw new Error('script-blocked');
     if (!sbClient) sbClient = window.supabase.createClient(window.CornerstoneSupabaseTransport.URL, window.CornerstoneSupabaseTransport.KEY);
     return sbClient;
   }
   function describeConnectError(e) {
     const msg = e && e.message;
     console.error('[Cornerstone] connect failed:', e);
-    if (msg === 'script-blocked') {
-      return "The multiplayer service didn't load. If you use an ad blocker or a strict browser privacy mode (like Brave Shields), try turning it off for this site, then reload the page.";
-    }
-    if (msg === 'timeout' || msg === 'TIMED_OUT') {
-      return "The connection timed out. If you're on a school, work, or hotel Wi-Fi, it may be blocking this. Try a different network (like phone data) and reload the page.";
-    }
-    if (msg === 'CHANNEL_ERROR') {
-      return "The multiplayer service refused the connection. Try reloading the page; if it keeps happening, it may be your network blocking it.";
-    }
-    return "Couldn't connect (" + (msg || 'unknown error') + "). Try reloading the page.";
+    if (msg === 'script-blocked') return "The multiplayer service didn't load. If you use an ad blocker or a strict privacy mode (like Brave Shields), turn it off for this site, then reload the page.";
+    if (msg === 'timeout' || msg === 'TIMED_OUT') return "The connection timed out. School, work or hotel Wi-Fi sometimes blocks this. Try another network (like phone data) and reload the page.";
+    if (msg === 'CHANNEL_ERROR') return "The multiplayer service refused the connection. Reload the page and try again. If it keeps happening, your network may be blocking it.";
+    return "Couldn't connect (" + (msg || 'unknown error') + "). Reload the page and try again.";
   }
+  const ONLINE_BOT_NAMES = ['Marigold', 'Juniper', 'Basil', 'Clover'];
   function mirrorConfigFromLobby(room) {
     config.mode = room.lobby.mode;
-    config.seats = room.lobby.seats.map((s) => ({
-      name: s.name || (s.type === 'bot' ? 'Computer' : 'Waiting…'),
-      type: s.type === 'open' ? 'human' : s.type, // an open seat is still "a person's seat", just unfilled
-      level: s.level || 'medium'
+    config.seats = room.lobby.seats.map((s, i) => ({
+      name: s.type === 'bot' ? (s.name ? s.name + ' (computer)' : ONLINE_BOT_NAMES[i]) : (s.name || 'Waiting…'),
+      type: s.type === 'open' ? 'human' : s.type,
+      level: s.level || 'medium',
+      owner: s.owner || null
     }));
   }
-  function openOnlineEntry() {
-    $('#online-name').value = S.onlineName || (config.seats[0] && config.seats[0].name !== 'Computer' ? config.seats[0].name : '') || 'You';
-    $('#online-code').value = '';
+  function openOnlineEntry(code) {
+    $('#online-name').value = store.get('onlineName', '') || '';
+    $('#online-code').value = code || '';
     $('#online-error').textContent = '';
-    $('#online-status').textContent = 'Enter your name, then create a room or join one with a code.';
+    const joining = !!code;
+    $('#online-create-box').hidden = joining;
+    $('#online-joining').hidden = !joining;
+    $('#online-joining').textContent = joining ? `You're joining room ${code}. Type your name, then press Join room.` : '';
+    $('#online-status').textContent = joining ? '' : 'Type your name. Then create a room, or join one with a code.';
     show('online');
+    setTimeout(() => $('#online-name').focus(), 0);
   }
-  function connectRoom(code, asHost) {
+  function readName() {
+    const n = ($('#online-name').value || '').trim().slice(0, 14);
+    if (!n) { $('#online-error').textContent = 'Please type your name first, so everyone knows who is who.'; $('#online-name').focus(); return null; }
+    store.set('onlineName', n);
+    return n;
+  }
+  function connectRoom(code, asHost, name) {
     return new Promise((resolve, reject) => {
-      const name = (($('#online-name').value || 'You').trim().slice(0, 14)) || 'You';
       S.onlineName = name;
-      const client = getSupabaseClient();
+      let client;
+      try { client = getSupabaseClient(); } catch (e) { reject(e); return; }
       let settled = false;
-      const timer = setTimeout(() => { if (!settled) { settled = true; reject(new Error('timeout')); } }, 12000);
+      const timer = setTimeout(() => { if (!settled) { settled = true; reject(new Error('timeout')); } }, 15000);
       try {
         window.CornerstoneSupabaseTransport.connect(client, code,
           (transport) => {
             if (settled) return; settled = true; clearTimeout(timer);
-            const room = new CornerstoneNet.Room(transport, { code, name, host: asHost, mode: config.mode, engine: E });
-            resolve(room);
+            resolve(new CornerstoneNet.Room(transport, { code, name, host: asHost, mode: 4, engine: E, timing: window.__testTiming }));
           },
-          (status, err) => { if (settled) return; settled = true; clearTimeout(timer); reject(err instanceof Error ? err : new Error(status)); }
-        );
+          (status, err) => { if (settled) return; settled = true; clearTimeout(timer); reject(err instanceof Error ? err : new Error(status)); },
+          { key: tabKey() });
       } catch (e) { if (!settled) { settled = true; clearTimeout(timer); reject(e); } }
     });
   }
   async function createRoom() {
-    const code = CornerstoneNet.makeCode();
-    $('#online-error').textContent = ''; $('#online-status').textContent = 'Creating room ' + code + '…';
-    try { enterLobby(await connectRoom(code, true)); }
+    if (S.connecting) return;
+    const name = readName(); if (!name) return;
+    S.connecting = true;
+    $('#online-error').textContent = ''; $('#online-status').textContent = 'Creating your room…';
+    try { enterLobby(await connectRoom(CornerstoneNet.makeCode(), true, name)); }
     catch (e) { $('#online-error').textContent = describeConnectError(e); $('#online-status').textContent = ''; }
+    finally { S.connecting = false; }
   }
-  async function joinRoom() {
-    const code = ($('#online-code').value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (code.length !== 5) { $('#online-error').textContent = 'Room codes are 5 letters or numbers.'; return; }
+  async function joinRoom(codeArg, nameArg) {
+    if (S.connecting) return false;
+    const code = String(codeArg || $('#online-code').value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const name = nameArg || readName(); if (!name) return false;
+    if (code.length !== 5) { $('#online-error').textContent = 'Room codes are 5 letters or numbers. Check the code and try again.'; return false; }
+    S.connecting = true;
     $('#online-error').textContent = ''; $('#online-status').textContent = 'Joining room ' + code + '…';
-    try {
-      const room = await connectRoom(code, false);
-      enterLobby(room);
-      setTimeout(() => { if (S.online === room && !room.started && room.presence.length < 2) $('#lobby-note').textContent = 'No one else is here yet. Double-check the room code with your friend.'; }, 3500);
-    } catch (e) { $('#online-error').textContent = describeConnectError(e); $('#online-status').textContent = ''; }
+    try { enterLobby(await connectRoom(code, false, name)); return true; }
+    catch (e) { $('#online-error').textContent = describeConnectError(e); $('#online-status').textContent = ''; return false; }
+    finally { S.connecting = false; }
   }
   function enterLobby(room) {
-    S.online = room;
-    room.on('lobby', () => { mirrorConfigFromLobby(room); renderLobby(); });
-    room.on('presence', () => renderLobby());
-    room.on('start-blocked', () => { $('#lobby-note').textContent = 'Every seat needs a person or Computer before you can start.'; });
-    room.on('start', () => { mirrorConfigFromLobby(room); beginOnlineGame(room); });
-    room.on('seat-orphaned', () => { if (S.game) { renderOnlineBanner(); renderAll(); } });
+    S.online = room; S.announced = ''; S.conn = 'ok';
+    ss.set('activeRoom', { code: room.code, name: room.myName });
+    room.on('lobby', () => {
+      mirrorConfigFromLobby(room); renderLobby();
+      if (room.started && S.game) { renderOnlineBanner(); renderAll(); onlineTick(); }
+    });
+    room.on('presence', () => { renderLobby(); if (S.game) { renderOnlineBanner(); renderStatus(); renderScoreboard(); } });
+    room.on('host', () => { renderLobby(); if (S.game) onlineTick(); });
+    room.on('start-blocked', () => { $('#lobby-note').textContent = 'Every seat needs a person or the computer before you can start.'; });
+    room.on('start', () => { mirrorConfigFromLobby(room); beginOnlineGame(room, false); });
+    room.on('sync', () => {
+      mirrorConfigFromLobby(room);
+      if ($('#screen-game').hidden || !S.game) beginOnlineGame(room, true); else refreshOnlineGame(room);
+    });
     room.on('move', onOnlineMove);
     room.on('resume', () => onlineTick());
-    room.on('rematch', () => { mirrorConfigFromLobby(room); S.game = null; S.over = false; renderLobby(); show('lobby'); });
+    room.on('rematch', () => {
+      const d = $('#dlg-over'); if (d.open) d.close();
+      mirrorConfigFromLobby(room);
+      S.game = null; S.over = false; S.humanTurn = false;
+      renderLobby(); show('lobby');
+      say('Back in the room. The host can start a new game.');
+    });
+    room.on('connection', (st) => {
+      S.conn = st === 'lost' ? 'lost' : 'ok';
+      renderOnlineBanner();
+      say(st === 'lost' ? 'Connection lost. Trying to reconnect. Your seat is kept for you.' : 'Reconnected.', false);
+    });
+    room.on('no-host', () => {
+      if (!room.lobby) $('#lobby-note').textContent = `No one seems to be in room ${room.code} right now. Check the code with whoever invited you, or go back and create your own room.`;
+    });
     if (room.lobby) mirrorConfigFromLobby(room);
-    renderLobby();
-    show('lobby');
+    requestWakeLock();
+    renderLobby(); show('lobby');
   }
   function renderLobby() {
     const room = S.online; if (!room) return;
     $('#lobby-code').textContent = room.code;
-    if (!room.lobby) { // joined the channel but haven't heard from the host yet
-      $('#lobby-seats').innerHTML = '';
-      $('#lobby-start').hidden = true;
-      $('#lobby-note').textContent = 'Connecting to the host…';
+    const people = room.presence.length ? room.presence : [{ key: room.myKey, name: room.myName }];
+    if (!room.lobby) {
+      $('#lobby-seats').innerHTML = ''; $('#lobby-people').textContent = '';
+      $('#lobby-start').hidden = true; $('#lobby-mode-group').hidden = true;
+      if (!/No one seems/.test($('#lobby-note').textContent)) $('#lobby-note').textContent = `Connecting to room ${room.code}…`;
       return;
     }
-    $$('input[name=lmode]').forEach((i) => { i.checked = +i.value === room.lobby.mode; i.disabled = !room.amHost(); });
+    const L = room.lobby, host = room.amHost(), inLobby = L.phase === 'lobby';
+    $('#lobby-people').textContent = 'In the room: ' + people.map((p) => p.name + (p.key === room.myKey ? ' (you)' : '') + (p.key === room.hostKey ? ' (host)' : '')).join(', ');
+    $('#lobby-mode-group').hidden = !inLobby;
+    $$('input[name=lmode]').forEach((i) => { i.checked = +i.value === L.mode; i.disabled = !host; });
     const box = $('#lobby-seats'); box.innerHTML = '';
-    room.lobby.seats.forEach((seat, i) => {
+    L.seats.forEach((seat, i) => {
       const mine = seat.owner === room.myKey;
-      const cols = seatColors(i);
-      const el = document.createElement('div'); el.className = 'seat';
-      const swatches = cols.map((c) => `<span><svg width="20" height="20" viewBox="0 0 10 10" aria-hidden="true"><rect width="10" height="10" rx="2" fill="${FILL[c]}"/>${settings.shapes ? glyphSvg(c, 5, 5, 2.6) : ''}</svg>${COLORS[c].name}</span>`).join('');
-      let body = `<h3>Seat ${i + 1}${mine ? ' — you' : ''}</h3><div class="seat-colors">${swatches}</div>`;
-      if (seat.type === 'human' && seat.owner) body += `<p class="hint-line">${esc(seat.name || 'A player')} has this seat.</p>`;
-      else if (seat.type === 'bot') body += `<p class="hint-line">Computer (${seat.level === 'easy' ? 'Gentle' : seat.level === 'hard' ? 'Tough' : 'Friendly challenge'})</p>`;
-      else body += `<p class="hint-line">Open — waiting for a player.</p>`;
+      const swatches = seatColors(i).map((c) => `<span><svg width="20" height="20" viewBox="0 0 10 10" aria-hidden="true"><rect width="10" height="10" rx="2" fill="${FILL[c]}"/>${settings.shapes ? glyphSvg(c, 5, 5, 2.6) : ''}</svg>${COLORS[c].name}</span>`).join('');
+      let who;
+      if (seat.type === 'human' && seat.owner) who = esc(seat.name || 'A player') + (room.isPresent(seat.owner) ? '' : ' — reconnecting…');
+      else if (seat.type === 'bot') who = 'Computer' + (seat.name ? ` (covering for ${esc(seat.name)})` : '') + ` · ${seat.level === 'easy' ? 'Gentle' : seat.level === 'hard' ? 'Tough' : 'Friendly challenge'}`;
+      else who = 'Open — waiting for someone to join';
       const actions = [];
-      if (!mine && seat.type !== 'human' && !room.started) actions.push(`<button class="btn small" data-claim="${i}">Sit here</button>`);
-      if (mine && !room.started && i !== 0) actions.push(`<button class="btn small" data-unclaim="${i}">Give up seat</button>`);
-      if (room.amHost() && !room.started) {
-        if (seat.type !== 'bot') actions.push(`<button class="btn small" data-setbot="${i}">Set to Computer</button>`);
-        else actions.push(`<label style="min-width:9rem">Skill<select data-level="${i}"><option value="easy"${seat.level === 'easy' ? ' selected' : ''}>Gentle</option><option value="medium"${seat.level === 'medium' ? ' selected' : ''}>Friendly</option><option value="hard"${seat.level === 'hard' ? ' selected' : ''}>Tough</option></select></label>`);
-        if (seat.type !== 'open' && i !== 0) actions.push(`<button class="btn small" data-setopen="${i}">Clear seat</button>`);
+      if (inLobby) {
+        if (!mine && seat.type === 'open') actions.push(`<button class="btn small" data-claim="${i}">Sit here</button>`);
+        if (mine && !host) actions.push(`<button class="btn small" data-unclaim="${i}">Give up seat</button>`);
+        if (host && !mine) {
+          if (seat.type !== 'bot') actions.push(`<button class="btn small" data-setbot="${i}">Computer plays here</button>`);
+          else actions.push(`<label style="min-width:9rem">Skill<select data-level="${i}"><option value="easy"${seat.level === 'easy' ? ' selected' : ''}>Gentle</option><option value="medium"${seat.level === 'medium' ? ' selected' : ''}>Friendly</option><option value="hard"${seat.level === 'hard' ? ' selected' : ''}>Tough</option></select></label>`);
+          if (seat.type === 'bot') actions.push(`<button class="btn small" data-setopen="${i}">Open for a person</button>`);
+          if (seat.type === 'human') actions.push(`<button class="btn small" data-setopen="${i}">Remove</button>`);
+        }
       }
-      el.innerHTML = body + (actions.length ? `<div class="row">${actions.join('')}</div>` : '');
+      const el = document.createElement('div'); el.className = 'seat';
+      el.innerHTML = `<h3>Seat ${i + 1}${mine ? '<span class="you">You</span>' : ''}</h3><div class="seat-colors">${swatches}</div><p class="hint-line">${who}</p>` +
+        (actions.length ? `<div class="row">${actions.join('')}</div>` : '');
       box.appendChild(el);
     });
     $$('#lobby-seats [data-claim]').forEach((b) => (b.onclick = () => room.claimSeat(+b.dataset.claim)));
     $$('#lobby-seats [data-unclaim]').forEach((b) => (b.onclick = () => room.leaveSeat(+b.dataset.unclaim)));
-    $$('#lobby-seats [data-setbot]').forEach((b) => (b.onclick = () => room.setSeat(+b.dataset.setbot, { type: 'bot', owner: null, level: 'medium' })));
-    $$('#lobby-seats [data-setopen]').forEach((b) => (b.onclick = () => room.setSeat(+b.dataset.setopen, { type: 'open', owner: null, name: '' })));
+    $$('#lobby-seats [data-setbot]').forEach((b) => (b.onclick = () => room.setSeat(+b.dataset.setbot, { type: 'bot' })));
+    $$('#lobby-seats [data-setopen]').forEach((b) => (b.onclick = () => room.setSeat(+b.dataset.setopen, { type: 'open' })));
     $$('#lobby-seats [data-level]').forEach((sel) => (sel.onchange = () => room.setSeat(+sel.dataset.level, { level: sel.value })));
-    $('#lobby-start').hidden = !room.amHost();
-    $('#lobby-start').disabled = room.lobby.seats.some((s) => s.type === 'open');
-    const n = room.presence.length;
-    $('#lobby-note').textContent = room.amHost()
-      ? `${n} connected. ${room.lobby.seats.some((s) => s.type === 'open') ? 'Fill every seat, or set it to Computer, to start.' : 'Ready to start!'}`
-      : `${n} connected. Waiting for the host to start the game.`;
+    const open = L.seats.filter((s) => s.type === 'open').length;
+    $('#lobby-start').hidden = !(host && inLobby);
+    $('#lobby-start').disabled = open > 0;
+    const hostName = (people.find((p) => p.key === room.hostKey) || {}).name || 'the host';
+    let note;
+    if (!inLobby) note = S.game ? 'A game is in progress.' : 'A game is in progress. Catching you up…';
+    else if (host) note = open ? `Waiting for ${open} more ${open === 1 ? 'person' : 'people'}. Share the invite, or tap "Computer plays here" for empty seats.` : 'Everyone is here. Press Start game!';
+    else if (room.mySeat() >= 0) note = `You're in! Waiting for ${hostName} to start the game.`;
+    else note = open ? 'Tap "Sit here" to take a seat.' : 'All seats are taken. You can watch this game.';
+    $('#lobby-note').textContent = note;
+  }
+  function copyText(text, msg) {
+    const done = () => { say(msg); $('#lobby-note').textContent = msg; setTimeout(renderLobby, 3500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => { $('#lobby-note').textContent = 'Your room code is ' + (S.online && S.online.code); });
+    else $('#lobby-note').textContent = 'Your room code is ' + (S.online && S.online.code);
   }
   $$('input[name=lmode]').forEach((i) => i.addEventListener('change', () => { if (S.online && S.online.amHost()) S.online.setMode(+i.value); }));
-  $('#lobby-copy').onclick = () => { if (S.online && navigator.clipboard) navigator.clipboard.writeText(S.online.code).catch(() => {}); say('Room code copied.'); };
-  $('#lobby-copy-link').onclick = () => { if (!S.online) return; const url = location.href.split('?')[0] + '?room=' + S.online.code; if (navigator.clipboard) navigator.clipboard.writeText(url).catch(() => {}); say('Invite link copied.'); };
-  $('#lobby-start').onclick = () => S.online && S.online.startGame(E);
+  $('#lobby-share').onclick = async () => {
+    if (!S.online) return;
+    const url = location.origin + location.pathname + '?room=' + S.online.code;
+    const text = `Come play Cornerstone with me! Tap the link, or open the game and enter room code ${S.online.code}.`;
+    if (navigator.share) {
+      try { await navigator.share({ title: 'Cornerstone', text, url }); return; }
+      catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    copyText(text + ' ' + url, 'Invite copied. Paste it into a text message or email to your friends.');
+  };
+  $('#lobby-copy').onclick = () => { if (S.online) copyText(S.online.code, 'Room code copied.'); };
+  $('#lobby-start').onclick = () => { if (S.online) S.online.startGame(); };
   $('#lobby-leave').onclick = () => { leaveOnline(); show('menu'); };
   $('#online-back').onclick = () => show('menu');
-  $('#online-create').onclick = createRoom;
-  $('#online-join').onclick = joinRoom;
+  $('#online-create').onclick = () => createRoom();
+  $('#online-join').onclick = () => joinRoom();
   $('#online-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') joinRoom(); });
-  $('#online-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') createRoom(); });
-  $('#menu-online').onclick = openOnlineEntry;
+  $('#online-name').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    if (!$('#online-create-box').hidden && !$('#online-code').value.trim()) createRoom(); else joinRoom();
+  });
+  $('#menu-online').onclick = () => openOnlineEntry();
 
   function leaveOnline() {
     if (S.online) { try { S.online.leave(); } catch (e) {} S.online = null; }
+    ss.set('activeRoom', null);
     if (S.onlineBotTimer) { clearTimeout(S.onlineBotTimer); S.onlineBotTimer = null; }
-    S.game = null; S.over = false; S.running = false; S.token++;
-    const saved = store.get('config', null); // undo the in-memory mirroring done for the online lobby
+    releaseWakeLock();
+    $('#online-banner').hidden = true;
+    S.game = null; S.over = false; S.running = false; S.humanTurn = false; S.token++;
+    const saved = store.get('config', null); // undo the mirroring done for the online room
     if (saved) { config.mode = saved.mode; config.seats = saved.seats; }
   }
-  function beginOnlineGame(room) {
+  function beginOnlineGame(room, quiet) {
+    if (S.onlineBotTimer) { clearTimeout(S.onlineBotTimer); S.onlineBotTimer = null; }
+    const d = $('#dlg-over'); if (d.open) d.close();
     S.token++; S.game = room.game; S.sel = null; S.cursor = null; S.locked = false; S.hintMsg = ''; S.banner = '';
-    S.over = false; S.start = Date.now(); S.anim = null;
+    S.over = false; S.humanTurn = false; S.start = Date.now(); S.anim = null; S.announced = '';
     const mine = room.myColors();
     S.viewColor = mine.length ? mine[0] : 0;
     zoomIdx = 0;
     show('game'); fit(); renderOnlineBanner(); renderAll();
-    say('The game has started.');
+    if (!quiet) say(mine.length ? `The game has started. You are ${mine.map((c) => COLORS[c].name).join(' and ')}.` : 'The game has started. You are watching.');
+    onlineTick();
+  }
+  function refreshOnlineGame(room) {
+    if (S.onlineBotTimer) { clearTimeout(S.onlineBotTimer); S.onlineBotTimer = null; }
+    S.game = room.game; S.sel = null; S.cursor = null; S.locked = false; S.humanTurn = false; S.hintMsg = '';
+    if (S.over && !room.game.out.every(Boolean)) { // the room corrected us: the game isn't actually over
+      S.over = false; const d = $('#dlg-over'); if (d.open) d.close();
+    }
+    renderOnlineBanner(); renderAll();
     onlineTick();
   }
   function renderOnlineBanner() {
-    const room = S.online, el = $('#online-banner'); if (!el) return;
-    if (!room) { el.hidden = true; return; }
+    const room = S.online, el = $('#online-banner');
+    if (!room || !room.lobby || $('#screen-game').hidden) { el.hidden = true; return; }
     el.hidden = false;
-    const n = room.presence.length, need = room.lobby.seats.length;
-    el.className = 'hint-line online-banner' + (n < need ? ' warn' : '');
-    el.textContent = `Online room ${room.code} · ${n} of ${need} seats connected` + (n < need ? ' · the computer is filling in for anyone who has disconnected' : '');
+    if (S.conn === 'lost') { el.className = 'hint-line online-banner warn'; el.textContent = 'Connection lost. Reconnecting… Your seat is kept for you.'; return; }
+    const seats = room.lobby.seats;
+    const missing = seats.filter((s) => s.type === 'human' && s.owner && !room.isPresent(s.owner)).map((s) => s.name);
+    const covered = seats.filter((s) => s.type === 'bot' && s.prevOwner).map((s) => s.name);
+    if (missing.length) { el.className = 'hint-line online-banner warn'; el.textContent = `Waiting for ${missing.join(' and ')} to reconnect. If they can't, the computer will play for them shortly.`; }
+    else if (covered.length) { el.className = 'hint-line online-banner'; el.textContent = `The computer is playing for ${covered.join(' and ')} until they're back.`; }
+    else { el.className = 'hint-line online-banner ok'; el.textContent = `Online room ${room.code} · everyone is connected`; }
   }
-  function onOnlineMove(payload) {
+  function onOnlineMove(m) {
     if (S.onlineBotTimer) { clearTimeout(S.onlineBotTimer); S.onlineBotTimer = null; }
+    const mine = S.justPlaced; S.justPlaced = false;
+    S.game = S.online.game;
     S.sel = null; S.cursor = null; S.locked = false; S.humanTurn = false; S.hintMsg = '';
-    if (!payload.pass && !reducedMotion()) { S.anim = { cells: payload.cells, t0: performance.now() }; animate(); }
+    if (!m.pass && !reducedMotion()) { S.anim = { cells: m.cells, t0: performance.now() }; animate(); }
     renderOnlineBanner(); renderAll();
-    if (payload.pass) { snd.pass(); say(`${COLORS[payload.color].name} has no moves left and passes.`); }
-    else { snd.bot(); say(`${seatFor(payload.color).name} played the ${pieceLabel(payload.p)} as ${COLORS[payload.color].name}.`, false); }
+    const who = isShared(m.color) ? 'The shared colour' : config.seats[currentSeatIndex(m.color)].name;
+    if (m.pass) { snd.pass(); say(`${COLORS[m.color].name} has no moves left and passes.`); }
+    else if (!mine) { snd.bot(); say(`${who} played the ${pieceLabel(m.p)} as ${COLORS[m.color].name}.`); }
     onlineTick();
   }
   function onlineTick() {
     const room = S.online, g = S.game;
-    if (!room || !g) return;
+    if (!room || !g || !room.started || g !== room.game) return;
     if (g.out.every(Boolean)) { finish(); return; }
+    if (S.over) return;
     const c = g.turn;
-    if (g.out[c]) { return; } // shouldn't linger: passes flip out[] and advance turn together
-    if (!amActingColor(c)) { S.humanTurn = false; renderAll(); return; }
+    if (g.out[c]) return;
+    if (!amActingColor(c)) {
+      if (S.humanTurn) { S.humanTurn = false; S.sel = null; S.cursor = null; S.locked = false; }
+      renderAll(); return;
+    }
     if (!E.hasMove(g, c)) { room.proposePass(c); return; }
     const seat = room.seatForColor(c);
     if (seat.type === 'bot') {
@@ -920,17 +1061,41 @@
       if (S.onlineBotTimer) return;
       S.onlineBotTimer = setTimeout(() => {
         S.onlineBotTimer = null;
-        if (S.online !== room || S.game !== g) return;
+        if (S.online !== room || room.game !== g || g.turn !== c || !room.actingColors().includes(c)) { onlineTick(); return; }
         const mv = E.botChoose(g, c, seat.level);
         if (mv) room.proposeMove(c, mv.p, mv.cells); else room.proposePass(c);
       }, botDelay());
-    } else {
-      S.humanTurn = true; S.viewColor = c;
-      renderAll();
-      say(`${seatFor(c).name}, it is your turn. You are ${COLORS[c].name}.`);
+      return;
+    }
+    const key = room.lobby.gameId + ':' + room.moveN + ':' + c;
+    const fresh = S.announced !== key;
+    if (fresh) { S.sel = null; S.cursor = null; S.locked = false; S.hintMsg = ''; }
+    S.humanTurn = true; S.viewColor = c;
+    renderAll();
+    if (fresh) {
+      S.announced = key;
+      say(isShared(c) ? 'Your turn. You are playing the shared colour, Green.' : `Your turn. You are ${COLORS[c].name}.`);
       snd.turn();
     }
   }
+
+  // Keep the screen awake during online play, and check we're in sync when the page comes back.
+  let wakeLock = null;
+  async function requestWakeLock() {
+    try {
+      if (!wakeLock && 'wakeLock' in navigator && document.visibilityState === 'visible') {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      }
+    } catch (e) { wakeLock = null; }
+  }
+  function releaseWakeLock() { try { if (wakeLock) wakeLock.release(); } catch (e) {} wakeLock = null; }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible' || !S.online) return;
+    requestWakeLock();
+    S.online.requestResync('check');
+  });
+  window.addEventListener('online', () => { if (S.online) S.online.requestResync('check'); });
 
   // ---------- wiring ----------
   $('#menu-play').onclick = () => { if (S.online) leaveOnline(); renderSetup(); show('setup'); };
@@ -945,7 +1110,7 @@
   $('#game-settings').onclick = () => { initSettingsUi(); openDlg('dlg-settings'); };
   $('#game-menu').onclick = () => {
     if (S.online) {
-      if (!S.over && !confirm('Leave this online game? Your seat will be handed to the computer.')) return;
+      if (!S.over && !confirm('Leave this online game? The computer will take over your colours.')) return;
       leaveOnline(); show('menu'); return;
     }
     if (!S.over && !confirm('Leave this game? Your progress will be lost.')) return;
@@ -963,16 +1128,27 @@
   drawLogo();
   applySettings();
 
-  // ?room=CODE deep link (from "Copy invite link") — prefill the join screen, don't auto-join without a name
-  (function handleRoomLink() {
+  // Invite links (?room=CODE) open the join screen with the code filled in.
+  // After a page reload mid-game, rejoin the same room automatically and take your seat back.
+  (async function handleEntry() {
     const m = /[?&]room=([A-Z0-9]{5})/i.exec(location.search);
-    if (!m) return;
-    history.replaceState(null, '', location.pathname);
-    openOnlineEntry();
-    $('#online-code').value = m[1].toUpperCase();
-    setTimeout(() => $('#online-name').focus(), 0);
+    const active = ss.get('activeRoom');
+    if (m) {
+      history.replaceState(null, '', location.pathname);
+      const code = m[1].toUpperCase();
+      if (active && active.code === code && active.name) { openOnlineEntry(code); $('#online-status').textContent = `Reconnecting to room ${code}…`; if (!(await joinRoom(code, active.name))) ss.set('activeRoom', null); return; }
+      openOnlineEntry(code);
+      const saved = store.get('onlineName', '');
+      if (saved) $('#online-name').value = saved;
+      return;
+    }
+    if (active && active.code && active.name) {
+      openOnlineEntry(active.code);
+      $('#online-joining').textContent = `Reconnecting to room ${active.code}…`;
+      if (!(await joinRoom(active.code, active.name))) ss.set('activeRoom', null);
+    }
   })();
 
   // test hook
-  window.__cornerstone = { S, config, startGame };
+  window.__cornerstone = { S, config, startGame, leaveOnline };
 })();

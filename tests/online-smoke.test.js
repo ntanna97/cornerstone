@@ -1,202 +1,185 @@
+/* Four "devices", each a separate copy of the real app (index.html + app.js), connected
+   through the simulated network in fakenet.js. Everything is driven through the UI. */
 const { JSDOM } = require('jsdom');
 const fs = require('fs'), path = require('path');
+const { makeNet } = require('./fakenet.js');
 const root = path.join(__dirname, '..');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8').replace(/<script src[^>]*><\/script>/g, '');
-const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'http://localhost/' });
-const w = dom.window;
-const errors = [];
-w.addEventListener('error', (e) => errors.push(e.message));
-
-const ctxStub = new Proxy({}, { get: (t, k) => (k in t ? t[k] : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
-w.HTMLCanvasElement.prototype.getContext = () => ctxStub;
-w.HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', ''); };
-w.HTMLDialogElement.prototype.close = function () { this.removeAttribute('open'); };
-w.scrollTo = () => {}; w.confirm = () => true;
-w.navigator.clipboard = { writeText: () => Promise.resolve() };
-
-// ---- fake realtime bus, shared between "app" (host, run through app.js) and a raw Room peer we drive by hand ----
-// Delivery is deferred a tick (setTimeout 0), like a real network round-trip — a fully synchronous
-// fake bus previously masked a race where the UI read room.lobby before the host's data had arrived.
-// Partitioned by room code, exactly like real Supabase channels (`cornerstone-room-<CODE>`) are
-// isolated from each other — without this, a leftover room from an earlier scenario in the same
-// test run could leak its broadcasts into an unrelated later room.
-function makeBus() {
-  const rooms = new Map(); // code -> peers[]
-  function peersFor(code) { if (!rooms.has(code)) rooms.set(code, []); return rooms.get(code); }
-  return {
-    join(code, key) {
-      const peers = peersFor(code);
-      function presenceList() { return peers.filter((p) => p.online).map((p) => ({ key: p.key, joinedAt: p.joinedAt, name: p.meta.name })); }
-      function broadcastPresence() {
-        const list = presenceList();
-        peers.forEach((p) => { if (p.online) setTimeout(() => p.presenceHandlers.forEach((cb) => cb(list)), 0); });
-      }
-      const p = { key, joinedAt: peers.length, presenceHandlers: [], msgHandlers: [], meta: {}, online: true };
-      peers.push(p);
-      return {
-        myKey: () => key,
-        track(meta) { p.meta = meta; broadcastPresence(); },
-        onPresence(cb) { p.presenceHandlers.push(cb); if (p.online) setTimeout(() => cb(presenceList()), 0); },
-        onMessage(cb) { p.msgHandlers.push(cb); },
-        send(event, payload) { peers.forEach((q) => { if (q.online && q.key !== key) setTimeout(() => q.msgHandlers.forEach((cb) => cb(event, payload, key)), 0); }); },
-        leave() { p.online = false; broadcastPresence(); }
-      };
-    }
-  };
-}
-const bus = makeBus();
-let nextKey = 0;
-w.__testFastBots = true;
-w.supabase = { createClient: () => ({}) };
-w.CornerstoneSupabaseTransport = {
-  URL: 'fake', KEY: 'fake',
-  connect(client, code, onReady, onError) {
-    const t = bus.join(code, 'app-' + (nextKey++));
-    setTimeout(() => onReady(t), 0);
-  }
-};
-
-w.eval(fs.readFileSync(path.join(root, 'engine.js'), 'utf8'));
-w.eval(fs.readFileSync(path.join(root, 'net.js'), 'utf8'));
-w.eval(fs.readFileSync(path.join(root, 'app.js'), 'utf8'));
-
-const $ = (s) => w.document.querySelector(s);
+const SRC = ['engine.js', 'net.js', 'app.js'].map((f) => fs.readFileSync(path.join(root, f), 'utf8'));
+const TIMING = { graceLobbyMs: 400, gracePlayMs: 700, helloRetryMs: 50, soloReadyMs: 400, noHostMs: 500, beatMs: 80, resyncThrottleMs: 30, gapMs: 150 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function until(fn, ms, what) { const t0 = Date.now(); while (!fn()) { if (Date.now() - t0 > ms) throw new Error('timed out waiting for: ' + what); await sleep(10); } }
+
+function openDevice(net, label, url, session) {
+  const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true, url: url || 'http://localhost/' });
+  const w = dom.window;
+  const errors = [];
+  w.addEventListener('error', (e) => errors.push(e.message));
+  const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
+  w.HTMLCanvasElement.prototype.getContext = () => ctx;
+  w.HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', ''); };
+  w.HTMLDialogElement.prototype.close = function () { this.removeAttribute('open'); };
+  w.scrollTo = () => {}; w.confirm = () => true;
+  w.__testFastBots = true; w.__testTiming = TIMING;
+  w.localStorage.setItem('cornerstone.settings', JSON.stringify({ sound: false, motion: true }));
+  Object.entries(session || {}).forEach(([k, v]) => w.sessionStorage.setItem(k, v));
+  w.supabase = { createClient: () => ({}) };
+  w.CornerstoneSupabaseTransport = { URL: 'fake', KEY: 'fake', connect(client, code, onReady, onError, opts) { const t = net.join(code, opts.key); setTimeout(() => onReady(t), 5); } };
+  SRC.forEach((src) => w.eval(src));
+  const $ = (s) => w.document.querySelector(s);
+  return { w, $, label, errors, api: w.__cornerstone, dom };
+}
+const TRACE = new Map();
+function trace(d) {
+  const r = d.api.S.online; if (!r || r.__traced) return; r.__traced = true;
+  const t = []; TRACE.set(d.label, t);
+  ['move', 'sync', 'start', 'lobby', 'host', 'resume', 'debug'].forEach((ev) => r.on(ev, (m, local) => t.push(ev + (ev === 'move' ? ` n=${m.n} c=${m.color}${m.pass ? ' PASS' : ''}${local ? ' (mine)' : ''}` : ev === 'debug' ? ' ' + m : '') + ` | moveN=${r.moveN} turn=${r.game ? r.game.turn : '-'} fp=${r.game ? require('../net.js').fingerprint(r.game, r.moveN) : '-'}`)));
+}
+function type(d, sel, value) { const el = d.$(sel); el.value = value; el.dispatchEvent(new d.w.Event('input')); }
+function pressEnter(d, sel) { d.$(sel).dispatchEvent(new d.w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); }
+// Play my turns the way a person would: "Suggested move", then "Place piece".
+function autoplay(devs) {
+  let on = true;
+  (async function loop() {
+    while (on) {
+      for (const d of devs) {
+        if (d.closed) continue;
+        trace(d);
+        const S = d.api.S;
+        if (S.online && S.humanTurn && !S.over && !d.$('#btn-hint').disabled) {
+          d.$('#btn-hint').click();
+          if (!d.$('#btn-place').disabled) d.$('#btn-place').click();
+        }
+      }
+      await sleep(6);
+    }
+  })();
+  return () => { on = false; };
+}
+function resultRows(d) { return Array.from(d.w.document.querySelectorAll('#over-body tbody tr')).map((tr) => tr.textContent.replace(/winner/, '').replace(/\s+/g, ' ').trim()); }
+function dump(devs) {
+  TRACE.forEach((t, label) => console.log('--- ' + label + ' last events:\n  ' + t.slice(-14).join('\n  ')));
+  devs.forEach((d) => { const r = d.api.S.online, S = d.api.S; console.log(d.label, JSON.stringify({ moveN: r.moveN, turn: r.game && r.game.turn, out: r.game && r.game.out.map(Number).join(''), ready: r.ready, host: r.hostKey === r.myKey ? 'ME' : r.hostKey, seat: r.mySeat(), humanTurn: S.humanTurn, over: S.over, same: S.game === r.game, status: d.$('#status-main').textContent, seats: r.lobby.seats.map((x) => x.type + ':' + (x.owner || '').slice(-4) + (x.prevOwner ? '<' + x.prevOwner.slice(-4) : '')) })); });
+}
+function checkNoErrors(devs) { devs.forEach((d) => { if (d.errors.length) throw new Error(d.label + ' had errors: ' + d.errors.join('; ')); }); }
+
+async function fourDevicesJoinViaInvite(net, names) {
+  const host = openDevice(net, names[0]);
+  host.$('#menu-online').click();
+  type(host, '#online-name', names[0]);
+  host.$('#online-create').click();
+  await until(() => !host.$('#screen-lobby').hidden && host.$('#lobby-code').textContent.length === 5, 2000, 'host lobby');
+  const code = host.$('#lobby-code').textContent;
+  const devs = [host];
+  for (const n of names.slice(1)) {
+    const d = openDevice(net, n, 'http://localhost/?room=' + code); // opened the invite link
+    await until(() => !d.$('#screen-online').hidden, 1000, n + ' join screen');
+    if (d.$('#online-code').value !== code) throw new Error('invite link should fill in the code');
+    if (!d.$('#online-create-box').hidden) throw new Error('invite link page should not offer "Create a room"');
+    type(d, '#online-name', n);
+    pressEnter(d, '#online-name'); // Enter on the name field joins (it used to create a new room)
+    devs.push(d);
+    await sleep(20);
+  }
+  return { code, devs };
+}
 
 (async () => {
-  w.localStorage.setItem('cornerstone.settings', JSON.stringify({ speed: 'fast', sound: false, motion: true }));
+  // ---------- Test 1: four people, four devices, invite link, full game, one mid-game page reload ----------
+  const net = makeNet({ seed: 7 });
+  const { code, devs } = await fourDevicesJoinViaInvite(net, ['Neil', 'Alex', 'Bea', 'Cy']);
+  const [host] = devs;
+  await until(() => devs.every((d) => d.api.S.online && d.api.S.online.mySeat() >= 0), 3000, 'everyone seated automatically');
+  await until(() => /Everyone is here/.test(host.$('#lobby-note').textContent), 2000, 'host sees everyone is here');
+  if (host.$('#lobby-start').disabled) throw new Error('Start should be enabled with 4 people seated');
+  if (!devs[1].$('#lobby-start').hidden) throw new Error('only the host sees Start');
+  if (!/You're in!/.test(devs[2].$('#lobby-note').textContent)) throw new Error('joiner should be told they are in: ' + devs[2].$('#lobby-note').textContent);
+  if (!/Neil \(you\) \(host\)/.test(host.$('#lobby-people').textContent)) throw new Error('people list: ' + host.$('#lobby-people').textContent);
+  console.log('lobby: 4 devices joined via invite link and were seated automatically');
 
-  // menu -> online entry -> create a 4-player room, host + 3 bots
-  $('#menu-online').click();
-  if ($('#screen-online').hidden) throw new Error('online screen not shown');
-  $('#online-name').value = 'You';
-  $('#online-create').click();
-  await sleep(50);
-  if ($('#screen-lobby').hidden) throw new Error('lobby screen not shown after create');
-  const roomCode = $('#lobby-code').textContent;
-  if (roomCode.length !== 5) throw new Error('bad room code: ' + roomCode);
+  host.$('#lobby-start').click();
+  await until(() => devs.every((d) => !d.$('#screen-game').hidden), 2000, 'game screen on all 4 devices');
+  // Each device should show its own colour and "(you)" next to its own name only
+  devs.forEach((d, i) => {
+    const mine = Array.from(d.w.document.querySelectorAll('.sc-name')).filter((el) => /\(you\)/.test(el.textContent));
+    if (mine.length !== 1) throw new Error(d.label + ' should see exactly one "(you)" on the scoreboard, saw ' + mine.length);
+  });
+  const stop = autoplay(devs);
 
-  // set the other three seats to Computer from the host UI
-  [1, 2, 3].forEach((i) => { const b = w.document.querySelector(`[data-setbot="${i}"]`); if (!b) throw new Error('no set-bot button for seat ' + i); b.click(); });
-  if ($('#lobby-start').disabled) throw new Error('start should be enabled once every seat has an occupant');
-  $('#lobby-start').click();
-  await sleep(50);
-  if ($('#screen-game').hidden) throw new Error('game screen not shown after start');
+  // Bea reloads her page mid-game
+  await until(() => host.api.S.online.moveN >= 10, 20000, 'some moves');
+  const bea = devs[2];
+  const session = { 'cornerstone.pid': bea.w.sessionStorage.getItem('cornerstone.pid'), 'cornerstone.activeRoom': bea.w.sessionStorage.getItem('cornerstone.activeRoom') };
+  bea.closed = true; net.goOffline(code, JSON.parse(JSON.stringify(session['cornerstone.pid'])).replace(/"/g, ''));
+  const bea2 = openDevice(net, 'Bea (reloaded)', 'http://localhost/', session);
+  devs[2] = bea2;
+  await until(() => bea2.api.S.online && bea2.api.S.online.started && !bea2.$('#screen-game').hidden, 3000, 'Bea back in the game after reload');
+  if (bea2.api.S.online.mySeat() !== bea.api.S.online.mySeat()) throw new Error('Bea should have her own seat back after reloading');
+  console.log('reload: Bea reloaded mid-game and was put straight back in her own seat');
 
-  const api = w.__cornerstone, S = api.S;
-  if (!S.online) throw new Error('S.online not set');
-  if ($('#online-banner').hidden) throw new Error('online banner should show');
-
-  // play the whole game via hint + place whenever it's our turn; bots run themselves
-  let guard = 0, lastLog = 0, lastPlaced = null;
-  while (!S.over && guard++ < 8000) {
-    if (S.humanTurn && !$('#btn-hint').disabled) { $('#btn-hint').click(); if (!$('#btn-place').disabled) $('#btn-place').click(); }
-    if (guard - lastLog > 500) {
-      lastLog = guard;
-      const p = S.game.placed.slice();
-      const stuck = lastPlaced && JSON.stringify(p) === JSON.stringify(lastPlaced);
-      console.log('guard', guard, 'turn', S.game.turn, 'out', S.game.out, 'humanTurn', S.humanTurn, 'sel', !!S.sel, 'cursor', !!S.cursor, 'botTimer', !!S.onlineBotTimer, 'placed', p, stuck ? 'STUCK' : '');
-      lastPlaced = p;
-    }
-    await sleep(2);
+  try { await until(() => devs.every((d) => d.api.S.over), 30000, 'game over on all 4 devices'); }
+  catch (e) {
+    TRACE.forEach((t, label) => console.log('--- ' + label + ' last events:\n  ' + t.slice(-14).join('\n  ')));
+    devs.forEach((d) => { const r = d.api.S.online, S = d.api.S; console.log(d.label, JSON.stringify({ moveN: r.moveN, turn: r.game && r.game.turn, out: r.game && r.game.out, ready: r.ready, host: r.hostKey, me: r.myKey, seat: r.mySeat(), humanTurn: S.humanTurn, over: S.over, sameGame: S.game === r.game, screen: ['menu','online','lobby','game'].find((x) => !d.$('#screen-' + x).hidden), status: d.$('#status-main').textContent, hint: d.$('#btn-hint').disabled, seats: r.lobby.seats.map((x) => x.type + ':' + x.owner) })); });
+    throw e;
   }
-  if (!S.over) throw new Error('online game did not finish, guard=' + guard);
-  await sleep(900);
-  if (!$('#dlg-over').hasAttribute('open')) throw new Error('results dialog not open');
-  console.log('online 4p vs bots finished:', $('#over-title').textContent);
+  stop();
+  await until(() => devs.every((d) => d.$('#dlg-over').hasAttribute('open')), 3000, 'results shown everywhere');
+  const rows0 = JSON.stringify(resultRows(devs[0]));
+  devs.forEach((d) => { if (JSON.stringify(resultRows(d)) !== rows0) throw new Error(d.label + ' shows different results'); });
+  const titles = devs.map((d) => d.$('#over-title').textContent);
+  const youWin = titles.filter((t) => /You win|you share/.test(t)).length;
+  if (!(youWin >= 1 && youWin <= 4)) throw new Error('someone should see a win on their own device: ' + titles.join(' | '));
+  if (!/tie/i.test(titles[0]) && youWin !== 1) throw new Error('without a tie, exactly one device says "You win!": ' + titles.join(' | '));
+  console.log('finish: all 4 devices agree on the results; titles: ' + titles.join(' | '));
 
-  // rematch as host: should return to the lobby with the same seats, then play a short 2-player game
-  $('#over-again').click();
-  await sleep(30);
-  if ($('#screen-lobby').hidden) throw new Error('rematch should return host to the lobby');
-  w.document.querySelector('input[name=lmode][value="2"]').checked = true;
-  w.document.querySelector('input[name=lmode][value="2"]').dispatchEvent(new w.Event('change'));
-  await sleep(20);
-  const bot1 = w.document.querySelector('[data-setbot="1"]');
-  if (!bot1) throw new Error('expected a seat 2 in 2-player mode');
-  bot1.click();
-  $('#lobby-start').click();
-  await sleep(30);
-  guard = 0;
-  while (!S.over && guard++ < 4000) {
-    if (S.humanTurn && !$('#btn-hint').disabled) { $('#btn-hint').click(); if (!$('#btn-place').disabled) $('#btn-place').click(); }
-    await sleep(5);
-  }
-  if (!S.over) throw new Error('2p rematch did not finish, guard=' + guard);
-  console.log('rematch finished:', $('#over-title').textContent);
+  // Play again: host rematches, everyone lands back in the room still seated
+  host.$('#over-again').click();
+  await until(() => devs.every((d) => !d.$('#screen-lobby').hidden), 2000, 'everyone back in the lobby');
+  await until(() => devs.every((d) => d.api.S.online.mySeat() >= 0), 2000, 'still seated');
+  console.log('rematch: everyone back in the room and still seated');
+  checkNoErrors(devs);
+  devs.forEach((d) => d.api.leaveOnline());
 
-  // leaving online play restores the local (non-mirrored) config
-  $('#over-menu').click();
-  await sleep(20);
-  if (S.online) throw new Error('S.online should be cleared after leaving');
-  if ($('#screen-menu').hidden) throw new Error('should be back at the main menu');
+  // ---------- Test 2: host's device drops mid-game; a computer seat keeps going; host rejoins ----------
+  const net2 = makeNet({ seed: 9 });
+  const r2 = await fourDevicesJoinViaInvite(net2, ['Neil', 'Alex', 'Bea']);
+  const [h2, a2, b2] = r2.devs;
+  await until(() => r2.devs.every((d) => d.api.S.online && d.api.S.online.mySeat() >= 0), 3000, 'seated');
+  h2.$('[data-setbot="3"]').click();
+  await until(() => !h2.$('#lobby-start').disabled, 2000, 'start enabled once seat 4 is the computer');
+  h2.$('#lobby-start').click();
+  await until(() => r2.devs.every((d) => !d.$('#screen-game').hidden), 2000, 'game on all');
+  const stop2 = autoplay(r2.devs);
+  await until(() => a2.api.S.online.moveN >= 8, 20000, 'some moves');
+  const hs = { 'cornerstone.pid': h2.w.sessionStorage.getItem('cornerstone.pid'), 'cornerstone.activeRoom': h2.w.sessionStorage.getItem('cornerstone.activeRoom') };
+  h2.closed = true; net2.goOffline(r2.code, JSON.parse(hs['cornerstone.pid']));
+  await until(() => /Waiting for Neil to reconnect|Neil/.test(a2.$('#online-banner').textContent), 2000, 'others are told Neil dropped');
+  await until(() => a2.api.S.online.amHost(), 2000, 'Alex takes over hosting');
+  const at = a2.api.S.online.moveN;
+  await until(() => a2.api.S.online.moveN > at + 2, 20000, 'game keeps going (computer seat now run by Alex)');
+  const h2b = openDevice(net2, 'Neil (reloaded)', 'http://localhost/', hs);
+  r2.devs[0] = h2b;
+  await until(() => h2b.api.S.online && h2b.api.S.online.started && !h2b.$('#screen-game').hidden, 3000, 'Neil back');
+  try { await until(() => r2.devs.every((d) => d.api.S.over), 30000, 'game over'); } catch (e) { dump(r2.devs); throw e; }
+  stop2();
+  const rowsA = JSON.stringify(resultRows(r2.devs[1]));
+  r2.devs.forEach((d) => { if (JSON.stringify(resultRows(d)) !== rowsA) throw new Error(d.label + ' disagrees on results'); });
+  console.log('host drop: computer seat kept playing under a new host, Neil rejoined, all devices agree');
+  checkNoErrors(r2.devs);
+  r2.devs.forEach((d) => d.api.leaveOnline());
 
-  // a second, independent peer can join the same room code and see the lobby (host must create a fresh room first)
-  $('#menu-online').click();
-  $('#online-name').value = 'You';
-  $('#online-create').click();
-  await sleep(30);
-  const code2 = $('#lobby-code').textContent;
-  const peerTransport = bus.join(code2, 'peer-1');
-  const peer = new w.CornerstoneNet.Room(peerTransport, { code: code2, name: 'Friend', engine: w.Cornerstone });
-  await sleep(20);
-  if (peer.lobby.hostKey === undefined) throw new Error('peer did not receive lobby state from host');
-  peer.claimSeat(1);
-  await sleep(20);
-  if (S.online.lobby.seats[1].owner !== 'peer-1') throw new Error('host did not see the peer claim seat 2');
-  console.log('cross-peer join via a real second Room: ok');
+  // ---------- Test 3: a wrong code says so instead of spinning forever ----------
+  const net3 = makeNet({ seed: 3 });
+  const lone = openDevice(net3, 'Lone');
+  lone.$('#menu-online').click(); type(lone, '#online-name', 'Pat'); type(lone, '#online-code', 'ZZZZZ'); lone.$('#online-join').click();
+  await until(() => /No one seems to be in room ZZZZZ/.test(lone.$('#lobby-note').textContent), 3000, 'wrong-code message');
+  // and a missing name is caught before connecting
+  const n4 = openDevice(net3, 'NoName'); n4.$('#menu-online').click(); type(n4, '#online-name', ''); n4.$('#online-create').click();
+  if (!/type your name/i.test(n4.$('#online-error').textContent)) throw new Error('should ask for a name');
+  console.log('errors: wrong room code and missing name are explained');
+  checkNoErrors([lone, n4]); lone.api.leaveOnline();
 
-  // --- regression test: the actual bug reported in production ---
-  // A synchronous fake bus (like the one above, pre-fix) delivers the host's lobby data to a
-  // joiner in the same tick a room is constructed, which hid a real race: over an actual
-  // network, a joiner's `room.lobby` is still null for a few ticks after connecting, while the
-  // UI waited for the host's first broadcast. The old code read `room.lobby.mode` immediately
-  // on connect and crashed with "null is not an object (evaluating 'room.lobby.mode')" on any
-  // real network. This drives the join through a SECOND real app.js window, with delivery
-  // deferred over multiple setTimeout(0) hops, to reproduce that latency honestly.
-  $('#menu-online').click();
-  $('#online-name').value = 'You';
-  $('#online-create').click();
-  await sleep(30);
-  const raceCode = $('#lobby-code').textContent;
-
-  const html2 = fs.readFileSync(path.join(root, 'index.html'), 'utf8').replace(/<script src[^>]*><\/script>/g, '');
-  const dom2 = new JSDOM(html2, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'http://localhost/' });
-  const w2 = dom2.window;
-  const errors2 = [];
-  w2.addEventListener('error', (e) => errors2.push(e.message));
-  w2.HTMLCanvasElement.prototype.getContext = () => ctxStub;
-  w2.HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', ''); };
-  w2.HTMLDialogElement.prototype.close = function () { this.removeAttribute('open'); };
-  w2.scrollTo = () => {}; w2.confirm = () => true;
-  w2.navigator.clipboard = { writeText: () => Promise.resolve() };
-  w2.__testFastBots = true;
-  w2.supabase = { createClient: () => ({}) };
-  w2.CornerstoneSupabaseTransport = {
-    URL: 'fake', KEY: 'fake',
-    connect(client, code, onReady) {
-      const t = bus.join(code, 'joiner-' + (nextKey++));
-      setTimeout(() => onReady(t), 0); // this hop, plus the bus's own, is the latency that exposed the bug
-    }
-  };
-  w2.eval(fs.readFileSync(path.join(root, 'engine.js'), 'utf8'));
-  w2.eval(fs.readFileSync(path.join(root, 'net.js'), 'utf8'));
-  w2.eval(fs.readFileSync(path.join(root, 'app.js'), 'utf8'));
-  const $2 = (s) => w2.document.querySelector(s);
-
-  $2('#menu-online').click();
-  $2('#online-name').value = 'Friend';
-  $2('#online-code').value = raceCode;
-  $2('#online-join').click();
-  await sleep(80); // generous: covers connect -> Room construction -> presence -> host's lobby reply
-  if (errors2.length) throw new Error('joining over real network latency crashed: ' + errors2.join('; '));
-  if ($2('#online-error').textContent) throw new Error('joiner should not see a connection error, got: ' + $2('#online-error').textContent);
-  if ($2('#screen-lobby').hidden) throw new Error('joiner should have reached the lobby screen');
-  if ($2('#lobby-code').textContent !== raceCode) throw new Error('joiner lobby should show the room code ' + raceCode);
-  if (!w2.__cornerstone.S.online || !w2.__cornerstone.S.online.lobby) throw new Error('joiner should have the host lobby state by now');
-  console.log('joining over real network latency does not crash on room.lobby: ok');
-
-  if (errors.length) throw new Error('runtime errors: ' + errors.join('; '));
   console.log('online smoke tests passed');
   process.exit(0);
 })().catch((e) => { console.error('FAIL', e.stack || e.message); process.exit(1); });

@@ -27,24 +27,30 @@ Built to be comfortable for older players and anyone with low vision.
 
 ## Online play
 
-"Play online with friends" creates a 5-letter room code; anyone with the code can join from
-their own device (each browser tab is one seat). One player hosts and can assign any open
-seat to another person or to the computer, then starts the game. From there:
+"Play online with friends": the host types their name and creates a room. They get a large
+5-letter room code and a **Share invite** button (opens the phone's share sheet, so the link can
+go straight into a text message). Friends tap the link, type their name, and are seated
+automatically. The host can give empty seats to the computer, then presses Start.
 
-- Every move is validated by the same rules engine on every device — nobody can cheat by
-  sending an illegal move, and no server ever runs game logic.
-- If the host disconnects, another connected player automatically takes over hosting.
-- If a person disconnects mid-game, the computer quietly takes their seat so the game
-  doesn't stall; if they come back, they'd need to rejoin as a new seat.
-- Someone can join a room in progress and watch, or rejoin after a refresh, and gets caught
-  up to the current board automatically.
+Built to survive real phones and real Wi-Fi:
+
+- **Phones locking or Wi-Fi blips:** a player who drops keeps their seat for 45 seconds. Everyone
+  else sees "Waiting for Alex to reconnect". After that the computer plays for them, and they get
+  the seat back automatically when they return.
+- **Page reloads:** reloading mid-game puts you straight back in your own seat.
+- **Host leaves:** the next seated player takes over automatically, including running any
+  computer players.
+- **Missed or out-of-order messages:** every move carries a sequence number and a fingerprint of
+  the board. Early moves are held and applied in order, and the host sends a heartbeat every few
+  seconds so any device that falls behind catches up. No single lost message can stall the game.
+- **No cheating:** every device checks every move with the same rules engine. A move out of turn,
+  illegal, or from a device whose board differs is rejected and that device is corrected.
+- **Screen stays on** during online play (where the browser supports it).
 
 Online play uses only [Supabase Realtime](https://supabase.com/realtime) as a message relay
-(presence + broadcast) scoped to that one room code — no database table is read or written,
-and no game state is stored on a server anywhere. `supabase-transport.js` holds the project
-URL and a public anon key (safe to expose; it grants no access beyond that relay), and
-`net.js` holds the actual sync protocol and is fully unit-tested with a fake in-memory
-transport, so it never needs a live connection to verify correctness (see `tests/README.md`).
+(presence + broadcast) on a channel named after the room code. No database table is read or
+written, and no game state is stored on a server. `supabase-transport.js` holds the project URL
+and a public key (safe to expose; it only allows that relay). The sync protocol is in `net.js`.
 
 ## Run it
 

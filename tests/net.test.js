@@ -1,200 +1,345 @@
+/* Online protocol tests: simulated devices on a realistic fake network. */
 const assert = require('assert');
 const E = require('../engine.js');
 const Net = require('../net.js');
+const { makeNet } = require('./fakenet.js');
 
-// ---- fake transport bus: simulates a Supabase realtime channel for N peers ----
-function makeBus() {
-  const peers = [];
-  function presenceList() { return peers.filter((p) => p.online).map((p) => ({ key: p.key, joinedAt: p.joinedAt, name: p.meta.name })); }
-  function broadcastPresence() { const list = presenceList(); peers.forEach((p) => p.online && p.presenceHandlers.forEach((cb) => cb(list))); }
-  return {
-    join(key) {
-      const p = { key, joinedAt: peers.length, presenceHandlers: [], msgHandlers: [], meta: {}, online: true };
-      peers.push(p);
-      return {
-        myKey: () => key,
-        track(meta) { p.meta = meta; broadcastPresence(); },
-        onPresence(cb) { p.presenceHandlers.push(cb); if (p.online) cb(presenceList()); },
-        onMessage(cb) { p.msgHandlers.push(cb); },
-        send(event, payload) { peers.forEach((q) => { if (q.online && q.key !== key) q.msgHandlers.forEach((cb) => cb(event, payload, key)); }); },
-        leave() { p.online = false; broadcastPresence(); }
-      };
-    }
+const TIMING = { graceLobbyMs: 300, gracePlayMs: 400, helloRetryMs: 40, soloReadyMs: 250, noHostMs: 300, beatMs: 60, resyncThrottleMs: 20 };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function until(fn, ms, what) {
+  const t0 = Date.now();
+  while (!fn()) { if (Date.now() - t0 > ms) throw new Error('timed out waiting for: ' + what); await sleep(5); }
+}
+
+// A "device": a Room plus the same turn-taking behaviour the app has (event-driven, no polling).
+function device(net, code, key, name, extra) {
+  const room = new Net.Room(net.join(code, key), Object.assign({ code, name, engine: E, timing: TIMING }, extra || {}));
+  let timer = null;
+  const act = () => {
+    if (room.dead || !room.started) return;
+    const g = room.game; if (g.out.every(Boolean)) return;
+    const c = g.turn;
+    if (!room.actingColors().includes(c)) return;
+    if (extra && extra.beforeAct) extra.beforeAct(room, g, c);
+    if (!E.hasMove(g, c)) room.proposePass(c);
+    else { const mv = E.botChoose(g, c, 'easy'); room.proposeMove(c, mv.p, mv.cells); }
   };
+  // instant: react synchronously inside the event, with no guard, exactly like the app's onlineTick.
+  // When it's my turn again straight after my own move (everyone else is out), the next move is
+  // proposed from inside the notification for the previous one. That exposed a real ordering bug.
+  const tick = (extra && extra.instant) ? () => act()
+    : () => {
+      if (timer || room.dead) return;
+      timer = setTimeout(() => { timer = null; act(); tick(); }, 3);
+    };
+  ['move', 'start', 'sync', 'resume', 'host', 'lobby'].forEach((ev) => room.on(ev, tick));
+  room.kill = () => { room.dead = true; };
+  return room;
 }
-function setup(n, mode) {
-  const bus = makeBus();
-  const rooms = [];
-  const t0 = bus.join('host');
-  const host = new Net.Room(t0, { code: 'ABCDE', name: 'Host', host: true, mode, engine: E });
-  rooms.push(host);
-  for (let i = 1; i < n; i++) {
-    const t = bus.join('p' + i);
-    const r = new Net.Room(t, { code: 'ABCDE', name: 'Player' + i, engine: E });
-    rooms.push(r);
+const fp = (r) => Net.fingerprint(r.game, r.moveN);
+const finished = (r) => r.started && r.game.out.every(Boolean);
+async function finishAll(rooms, ms, what) {
+  await until(() => rooms.every(finished), ms || 20000, what || 'game to finish on every device');
+  await until(() => rooms.every((r) => r.moveN === rooms[0].moveN), 3000, 'everyone to agree on the move count');
+  const f = fp(rooms[0]);
+  rooms.forEach((r, i) => assert.strictEqual(fp(r), f, 'device ' + i + ' ended with a different board'));
+}
+function closeAll(rooms) { rooms.forEach((r) => { r.kill && r.kill(); try { r.leave(); } catch (e) {} }); }
+
+async function fourDeviceLobby(seed, mode) {
+  const net = makeNet({ seed });
+  const code = 'ROOM' + seed;
+  const host = device(net, code, 'k-host', 'Neil', { host: true, mode: mode || 4 });
+  const others = [];
+  for (const [k, n] of [['k-a', 'Alex'], ['k-b', 'Bea'], ['k-c', 'Cy']].slice(0, (mode || 4) - 1)) { others.push(device(net, code, k, n)); await sleep(15); }
+  const all = [host, ...others];
+  await until(() => all.every((r) => r.lobby && r.mySeat() >= 0), 3000, 'everyone to be seated automatically');
+  await until(() => all.every((r) => r.lobby.rev === host.lobby.rev), 3000, 'lobby to agree everywhere');
+  return { net, code, host, others, all };
+}
+
+const tests = [];
+const test = (name, fn) => tests.push({ name, fn });
+
+test('4 devices: joiners are seated automatically, distinct seats, host is the creator', async () => {
+  const { all, host } = await fourDeviceLobby(11);
+  const seats = all.map((r) => r.mySeat()).sort();
+  assert.deepStrictEqual(seats, [0, 1, 2, 3]);
+  all.forEach((r) => assert.strictEqual(r.hostKey, 'k-host', 'everyone agrees who the host is'));
+  assert.strictEqual(host.lobby.seats[1].name, 'Alex');
+  closeAll(all);
+});
+
+test('4 devices play a whole game to the end and finish with identical boards (several network seeds)', async () => {
+  for (const seed of [21, 22, 23]) {
+    const { all, host } = await fourDeviceLobby(seed);
+    host.startGame();
+    await until(() => all.every((r) => r.started), 3000, 'game to start everywhere');
+    await finishAll(all);
+    closeAll(all);
   }
-  return { bus, rooms };
-}
-function firstMove(room, color) {
-  const cells = [E.COLORS[color].corner];
-  return room.proposeMove(color, 0, cells); // the 1-square piece always legally covers its own corner
-}
+});
 
-// 1) lobby: join, claim seats, reject start with an open seat, start once full
-{
-  const { rooms } = setup(3, 3);
-  const [host, b, c] = rooms;
-  assert.strictEqual(host.lobby.seats.length, 3);
-  assert.strictEqual(host.lobby.seats[0].owner, 'host');
-  b.claimSeat(1); c.claimSeat(2);
-  assert.strictEqual(host.lobby.seats[1].owner, 'p1');
-  assert.strictEqual(b.lobby.seats[1].owner, 'p1', 'lobby broadcast reached peer b');
-  assert.strictEqual(c.lobby.seats[1].owner, 'p1', 'lobby broadcast reached peer c');
-  host.startGame(E);
-  assert.ok(host.started && b.started && c.started, 'all peers started');
-  assert.strictEqual(JSON.stringify(E.serialize(host.game)), JSON.stringify(E.serialize(b.game)));
-  assert.strictEqual(JSON.stringify(E.serialize(host.game)), JSON.stringify(E.serialize(c.game)));
-  console.log('lobby + start: ok');
-}
+test('players who react instantly (like the app does) still keep every device in sync', async () => {
+  for (const seed of [24, 25]) {
+    const net = makeNet({ seed });
+    const code = 'INST' + seed;
+    const host = device(net, code, 'k-host', 'Neil', { host: true, instant: true });
+    const others = [];
+    for (const [k, n] of [['k-a', 'Alex'], ['k-b', 'Bea'], ['k-c', 'Cy']]) { others.push(device(net, code, k, n, { instant: true })); await sleep(15); }
+    const all = [host, ...others];
+    await until(() => all.every((r) => r.mySeat() >= 0), 3000, 'seated');
+    let resyncs = 0; all.forEach((r) => r.on('sync', () => resyncs++));
+    host.startGame();
+    await finishAll(all);
+    assert.strictEqual(resyncs, 0, 'a clean game needs no corrections (got ' + resyncs + ')');
+    closeAll(all);
+  }
+});
 
-// 2) moves replicate to everyone, only the owning colour may act, turn cycles 0-3 even with 2 seats
-{
-  const { rooms } = setup(2, 2); // seat0=host controls colours 0,2 ; seat1 controls 1,3
-  const [host, b] = rooms;
-  b.claimSeat(1);
-  host.startGame(E);
-  const bad = b.proposeMove(0, 0, [E.COLORS[0].corner]); // b does not own colour 0
-  assert.strictEqual(bad.ok, false); assert.strictEqual(bad.reason, 'not-your-colour');
-  assert.ok(firstMove(host, 0).ok);
-  assert.strictEqual(host.game.turn, 1); assert.strictEqual(b.game.turn, 1);
-  assert.strictEqual(b.game.board[E.COLORS[0].corner[1] * 20 + E.COLORS[0].corner[0]], 0, 'move replicated to peer');
-  assert.ok(firstMove(b, 1).ok);
-  assert.strictEqual(host.game.turn, 2, 'turn advances to colour 2, not wrapping at seat count');
-  const wrongSeat = host.proposeMove(3, 0, [E.COLORS[3].corner]); // host does not own colour 3 yet (turn is 2 anyway)
-  assert.strictEqual(wrongSeat.ok, false);
-  assert.ok(firstMove(host, 2).ok); // host owns colour 2 (seat0)
-  assert.strictEqual(host.game.turn, 3);
-  assert.ok(firstMove(b, 3).ok); // b owns colour 3 (seat1)
-  assert.strictEqual(host.game.turn, 0, 'wraps back to colour 0 after all four colours');
-  console.log('move replication + seat/colour mapping: ok');
-}
+test('two different moves for the same turn (a reloaded tab racing its old self): everyone converges and play continues', async () => {
+  for (const seed of [171, 172, 173]) {
+    const net = makeNet({ seed, maxDelay: 25 });
+    const code = 'DUAL' + seed;
+    const host = device(net, code, 'k-host', 'Neil', { host: true, instant: true });
+    const a = device(net, code, 'k-a', 'Alex', { instant: true });
+    const b = device(net, code, 'k-b', 'Bea', { instant: true });
+    const c = device(net, code, 'k-c', 'Cy', { instant: true });
+    const all = [host, a, b, c];
+    await until(() => all.every((r) => r.mySeat() >= 0), 3000, 'seated');
+    const seatA = a.mySeat();
+    a.kill(); // take manual control of Alex's colour for the conflicting turn
+    host.startGame();
+    await until(() => a.started && a.game.turn === seatA && a.moveN === seatA, 5000, "Alex's first turn");
+    const g = a.game;
+    const moves = E.legalMoves(g, seatA);
+    const m1 = moves[0], m2 = moves.find((m) => m.p !== m1.p);
+    // the "old tab" sends one move for this turn...
+    const ghost = net.join(code, 'k-a-old');
+    const alt = E.cloneGame(g); E.apply(alt, seatA, m2.p, m2.cells); alt.turn = (seatA + 1) % 4; alt.meta.last = null;
+    ghost.send('move', { gid: a.lobby.gameId, n: a.moveN + 1, color: seatA, p: m2.p, cells: m2.cells, h: Net.fingerprint(alt, a.moveN + 1) });
+    // ...and the reloaded tab sends a different one at the same moment
+    a.proposeMove(seatA, m1.p, m1.cells);
+    a.dead = false; // hand Alex back to normal play
+    await finishAll(all, 20000, 'game to finish after the conflicting moves (seed ' + seed + ')');
+    closeAll(all); try { ghost.leave(); } catch (e) {}
+  }
+});
 
-// 3) 3-player mode: the shared 4th colour rotates across seats as it's played
-{
-  const { rooms } = setup(3, 3);
-  const [host, b, c] = rooms;
-  b.claimSeat(1); c.claimSeat(2);
-  host.startGame(E);
-  assert.strictEqual(host.seatForColor(3).owner, 'host', 'shared colour starts with seat 0');
-  assert.deepStrictEqual(host.actingColors().sort(), [0, 3]);
-  ['host', 'b', 'c'].length; // noop
-  assert.ok(firstMove(host, 0).ok);
-  assert.ok(firstMove(b, 1).ok);
-  assert.ok(firstMove(c, 2).ok);
-  assert.strictEqual(host.game.turn, 3);
-  assert.strictEqual(host.seatForColor(3).owner, 'host', 'still seat 0 before it has been played once');
-  assert.ok(firstMove(host, 3).ok); // seat 0 plays the shared colour's first turn
-  assert.strictEqual(host.game.meta.sharedCount, 1);
-  assert.strictEqual(host.seatForColor(3).owner, 'p1', 'shared colour rotates to seat 1 next');
-  assert.strictEqual(b.seatForColor(3).owner, 'p1', 'rotation agrees on every peer');
-  console.log('3-player shared-colour rotation: ok');
-}
+test("a device whose board silently drifted is corrected, and the host still takes its own turn right after", async () => {
+  const net = makeNet({ seed: 181 });
+  const code = 'DRIFT';
+  let drifted = false;
+  const host = device(net, code, 'k-host', 'Neil', { host: true, instant: true });
+  const others = [];
+  for (const [k, n] of [['k-a', 'Alex'], ['k-b', 'Bea'], ['k-c', 'Cy']]) { others.push(device(net, code, k, n, { instant: true, beforeAct: (room, g, c) => {
+    // the seat just before the host (colour 3) drifts once, right before it moves: the move is legal
+    // everywhere but its board fingerprint won't match, and the next turn is the host's
+    if (c === 3 && !drifted && room.moveN >= 8) { drifted = true; g.meta.sharedCount = 99; }
+  } })); await sleep(15); }
+  const all = [host, ...others];
+  await until(() => all.every((r) => r.mySeat() >= 0), 3000, 'seated');
+  await until(() => all.every((r) => r.lobby.seats[3].owner && r.lobby.rev === host.lobby.rev), 2000, 'lobby settled');
+  const hostSaw = []; host.on('debug', (m) => hostSaw.push(m));
+  host.startGame();
+  await finishAll(all, 20000, 'game to finish after the drift');
+  assert.ok(drifted, 'the drift was actually injected');
+  assert.ok(hostSaw.some((m) => /hash-mismatch/.test(m)), 'the host noticed the mismatch: ' + hostSaw.join(', '));
+  closeAll(all);
+});
 
-// 4) host disconnect elects a new host who inherits bot/open colours and lobby authority
-{
-  const { rooms } = setup(3, 3);
-  const [host, b, c] = rooms;
-  b.claimSeat(1);
-  host.setSeat(2, { type: 'bot', level: 'medium' });
-  assert.ok(host.actingColors().includes(2), 'host acts for bot seat 2');
-  host.startGame(E);
-  assert.ok(c.started);
-  host.leave();
-  assert.strictEqual(b.hostKey, 'p1');
-  assert.ok(b.isHost);
-  assert.ok(b.actingColors().includes(2), 'new host inherits the bot seat');
-  console.log('host failover: ok');
-}
+test('host is decided without clocks: a joiner never takes charge before it has the room', async () => {
+  const net = makeNet({ seed: 31 });
+  const host = device(net, 'CLK', 'k-z-host', 'Host', { host: true });
+  const j = device(net, 'CLK', 'k-a-joiner', 'Joiner'); // sorts before the host alphabetically
+  assert.strictEqual(j.amHost(), false, 'a brand-new joiner is not host');
+  await until(() => j.lobby && j.mySeat() === 1, 2000, 'joiner seated');
+  assert.strictEqual(j.hostKey, 'k-z-host');
+  assert.strictEqual(host.hostKey, 'k-z-host');
+  closeAll([host, j]);
+});
 
-// 5) a human seat's owner drops mid-game -> seat flips to bot and host can act for it
-{
-  const { rooms } = setup(3, 3);
-  const [host, b, c] = rooms;
-  b.claimSeat(1); c.claimSeat(2);
-  host.startGame(E);
-  b.leave();
-  assert.strictEqual(host.lobby.seats[1].type, 'bot', 'seat orphaned to bot');
-  assert.strictEqual(host.lobby.seats[1].owner, null);
-  assert.ok(host.actingColors().includes(1), 'host now acts for the orphaned colour');
-  assert.strictEqual(c.lobby.seats[1].type, 'bot', 'orphan status reached remaining peer');
-  console.log('mid-game orphan takeover: ok');
-}
+test('seat requests never bounce someone who is already seated; two simultaneous joiners get different seats', async () => {
+  const net = makeNet({ seed: 41 });
+  const host = device(net, 'RACE', 'h', 'H', { host: true });
+  const a = device(net, 'RACE', 'a', 'A'), b = device(net, 'RACE', 'b', 'B');
+  await until(() => a.mySeat() >= 0 && b.mySeat() >= 0, 2000, 'both seated');
+  assert.notStrictEqual(a.mySeat(), b.mySeat());
+  const before = a.mySeat();
+  a.claimSeat(-1); a.claimSeat(-1); await sleep(80);
+  assert.strictEqual(a.mySeat(), before, 'repeated "any seat" requests keep the same seat');
+  closeAll([host, a, b]);
+});
 
-// 6) late joiner resyncs full game state via hello/start
-{
-  const { rooms, bus } = setup(2, 2);
-  const [host, b] = rooms;
-  b.claimSeat(1);
-  host.startGame(E);
-  firstMove(host, 0);
-  const t3 = bus.join('late');
-  const late = new Net.Room(t3, { code: 'ABCDE', name: 'Late', engine: E });
-  late.requestResync();
-  assert.ok(late.started, 'late joiner received a start/resync snapshot');
-  assert.strictEqual(JSON.stringify(E.serialize(late.game)), JSON.stringify(E.serialize(host.game)));
-  console.log('late-join resync: ok');
-}
+test('changing the number of players keeps everyone who is seated', async () => {
+  const { all, host } = await fourDeviceLobby(51, 3);
+  host.setMode(4);
+  await until(() => all.every((r) => r.lobby.mode === 4), 2000, 'mode change to arrive');
+  all.forEach((r) => assert.ok(r.mySeat() >= 0, 'still seated after going to 4 players'));
+  host.setMode(2);
+  await until(() => all.every((r) => r.lobby.mode === 2), 2000, 'mode change to arrive');
+  assert.strictEqual(host.lobby.seats.filter((s) => s.owner).length, 2, 'two people keep seats when going down to 2');
+  closeAll(all);
+});
 
-// 7) an illegal proposed move (e.g. stale board) is rejected before touching state
-{
-  const { rooms } = setup(2, 2);
-  const [host, b] = rooms;
-  b.claimSeat(1);
-  host.startGame(E);
-  firstMove(host, 0);
-  const again = host.proposeMove(0, 0, [E.COLORS[0].corner]); // same square already filled
-  assert.strictEqual(again.ok, false);
-  assert.strictEqual(again.reason, 'overlap');
-  console.log('illegal move rejection: ok');
-}
+test('a phone that locks briefly keeps its seat and catches up on the moves it missed', async () => {
+  const { net, code, all, host, others } = await fourDeviceLobby(61);
+  host.startGame();
+  await until(() => all.every((r) => r.started), 3000, 'start');
+  await until(() => host.moveN >= 6, 5000, 'a few moves');
+  net.goOffline(code, 'k-b');
+  await sleep(150); // shorter than the 400ms grace period
+  assert.strictEqual(host.lobby.seats[2].type, 'human', 'seat is held during the grace period');
+  net.goOnline(code, 'k-b');
+  await finishAll(all);
+  closeAll(all);
+});
 
+test('someone gone longer than the grace period: the computer covers, then they get the seat back after a reload', async () => {
+  const { net, code, all, host, others } = await fourDeviceLobby(71);
+  host.startGame();
+  await until(() => all.every((r) => r.started), 3000, 'start');
+  await until(() => host.moveN >= 4, 5000, 'a few moves');
+  const gone = others[0]; gone.kill(); net.goOffline(code, 'k-a');
+  await until(() => host.lobby.seats[1].type === 'bot', 3000, 'computer to take over the seat');
+  const at = host.moveN;
+  await until(() => host.moveN >= at + 6, 5000, 'game to keep going without them');
+  const back = device(net, code, 'k-a', 'Alex'); // same tab id, as after a page reload
+  await until(() => host.lobby.seats[1].type === 'human' && host.lobby.seats[1].owner === 'k-a', 3000, 'seat handed back');
+  const live = [host, others[1], others[2], back];
+  await finishAll(live);
+  closeAll(live);
+});
 
-// 8) turn advance skips colours that have already dropped out (not just the one just played)
-{
-  const { rooms } = setup(4, 4);
-  const [host, b, c, d] = rooms;
-  b.claimSeat(1); c.claimSeat(2); d.claimSeat(3);
-  host.startGame(E);
-  host.game.out[1] = true; host.game.out[2] = true; // simulate colours 1 and 2 already having no moves earlier
-  b.game.out[1] = true; b.game.out[2] = true;
-  c.game.out[1] = true; c.game.out[2] = true;
-  d.game.out[1] = true; d.game.out[2] = true;
-  host.game.turn = 0;
-  assert.ok(firstMove(host, 0).ok);
-  assert.strictEqual(host.game.turn, 3, 'turn skips the two out colours and lands on 3');
-  assert.strictEqual(b.game.turn, 3, 'every peer computes the same skip');
-  assert.ok(firstMove(d, 3).ok);
-  assert.strictEqual(host.game.turn, 0, 'wraps back to 0, skipping 1 and 2 again');
-  console.log('turn-skip over dropped-out colours: ok');
-}
+test('host drops mid-game: the next seat takes over the computer players; the old host rejoins and catches up', async () => {
+  const net = makeNet({ seed: 81 });
+  const host = device(net, 'HOST', 'k0', 'H', { host: true, mode: 4 });
+  const a = device(net, 'HOST', 'k1', 'A');
+  await until(() => a.mySeat() === 1, 2000, 'a seated');
+  host.setSeat(2, { type: 'bot' }); host.setSeat(3, { type: 'bot' });
+  await until(() => a.lobby.seats[3].type === 'bot', 2000, 'bots set');
+  host.startGame();
+  await until(() => a.started, 2000, 'start');
+  await until(() => a.moveN >= 5, 5000, 'some moves');
+  host.kill(); net.goOffline('HOST', 'k0');
+  await until(() => a.amHost(), 2000, 'the other player becomes host');
+  const at = a.moveN;
+  await until(() => a.moveN >= at + 3, 5000, 'computer seats keep playing under the new host');
+  const back = device(net, 'HOST', 'k0', 'H');
+  await until(() => back.started && back.ready, 3000, 'old host back in sync');
+  await finishAll([a, back]);
+  closeAll([a, back]);
+});
 
-// 9) a newcomer joining mid-game is caught up automatically, without disrupting peers already playing
-{
-  const { rooms, bus } = setup(3, 3);
-  const [host, b, c] = rooms;
-  b.claimSeat(1); c.claimSeat(2);
-  host.startGame(E);
-  firstMove(host, 0);
-  const bGameRefBefore = b.game;
-  let bGotStartAgain = false;
-  b.on('start', () => { bGotStartAgain = true; });
-  const t4 = bus.join('spectator');
-  const spec = new Net.Room(t4, { code: 'ABCDE', name: 'Spectator', engine: E });
-  assert.ok(spec.started, 'newcomer is caught up without an explicit requestResync() call');
-  assert.strictEqual(JSON.stringify(E.serialize(spec.game)), JSON.stringify(E.serialize(host.game)));
-  assert.strictEqual(b.game, bGameRefBefore, "an already-playing peer's game object is untouched by someone else joining");
-  assert.strictEqual(bGotStartAgain, false, "an already-playing peer must not receive a disruptive 'start' event");
-  console.log('mid-game newcomer catch-up without disrupting existing players: ok');
-}
+test('pressing Leave hands the seat to the computer straight away (no waiting)', async () => {
+  const { all, host, others } = await fourDeviceLobby(91);
+  host.startGame();
+  await until(() => all.every((r) => r.started), 3000, 'start');
+  const seat = others[1].mySeat();
+  others[1].kill(); others[1].leave();
+  await until(() => host.lobby.seats[seat].type === 'bot', 200, 'immediate handover (well under the 400ms grace), seat ' + seat + ' is ' + JSON.stringify(host.lobby.seats[seat]));
+  const live = [host, others[0], others[2]];
+  await finishAll(live);
+  closeAll(live);
+});
 
-console.log('net tests passed');
+test('lost messages: a device that misses moves is healed by the heartbeat', async () => {
+  const net = makeNet({ seed: 101 });
+  let dropped = 0;
+  net.dropWhen((ev, data, from, to) => ev === 'move' && to === 'k-c' && data.n % 7 === 3 && dropped++ < 6);
+  const host = device(net, 'LOSS', 'k-host', 'H', { host: true });
+  const others = [device(net, 'LOSS', 'k-a', 'A'), device(net, 'LOSS', 'k-b', 'B'), device(net, 'LOSS', 'k-c', 'C')];
+  const all = [host, ...others];
+  await until(() => all.every((r) => r.mySeat() >= 0), 3000, 'seated');
+  host.startGame();
+  await finishAll(all);
+  assert.ok(dropped > 0, 'the test actually dropped messages');
+  closeAll(all);
+});
+
+test('lost messages the other way: the host misses a player\'s move and the player re-sends it', async () => {
+  const net = makeNet({ seed: 111 });
+  let dropped = 0;
+  net.dropWhen((ev, data, from, to) => ev === 'move' && from === 'k-a' && to === 'k-host' && dropped++ < 3);
+  const host = device(net, 'LOSS2', 'k-host', 'H', { host: true, mode: 2 });
+  const a = device(net, 'LOSS2', 'k-a', 'A');
+  await until(() => a.mySeat() === 1, 2000, 'seated');
+  host.startGame();
+  await finishAll([host, a]);
+  assert.ok(dropped > 0);
+  closeAll([host, a]);
+});
+
+test('out-of-turn, forged and duplicate moves are ignored', async () => {
+  const net = makeNet({ seed: 121 });
+  const host = device(net, 'FORGE', 'k-host', 'H', { host: true, mode: 2 });
+  const a = device(net, 'FORGE', 'k-a', 'A');
+  await until(() => a.mySeat() === 1, 2000, 'seated');
+  host.kill(); a.kill(); // stop autoplay so we control every move
+  host.startGame();
+  await until(() => a.started, 2000, 'start');
+  // a tries to play blue (not theirs, not their turn)
+  assert.strictEqual(a.proposeMove(0, 0, [E.COLORS[0].corner]).ok, false);
+  // a forges a raw message for yellow while it's blue's turn
+  const raw = net.join('FORGE', 'k-evil');
+  raw.send('move', { gid: host.lobby.gameId, n: 1, color: 1, p: 0, cells: [E.COLORS[1].corner] });
+  await sleep(60);
+  assert.strictEqual(host.moveN, 0, 'forged out-of-turn move ignored');
+  assert.strictEqual(host.proposeMove(0, 0, [E.COLORS[0].corner]).ok, true);
+  await until(() => a.moveN === 1, 1000, 'real move arrives');
+  const board = fp(a);
+  raw.send('move', { gid: host.lobby.gameId, n: 1, color: 0, p: 0, cells: [E.COLORS[0].corner] }); // replayed duplicate
+  await sleep(60);
+  assert.strictEqual(a.moveN, 1); assert.strictEqual(fp(a), board, 'duplicate ignored');
+  closeAll([host, a]);
+});
+
+test('a full room: an extra person watches, and stays in sync with the game', async () => {
+  const { net, code, all, host } = await fourDeviceLobby(131);
+  const watcher = device(net, code, 'k-watch', 'Wes');
+  await until(() => watcher.lobby, 2000, 'watcher gets the room');
+  assert.strictEqual(watcher.mySeat(), -1, 'no seat left for the fifth person');
+  host.startGame();
+  await finishAll([...all, watcher]);
+  closeAll([...all, watcher]);
+});
+
+test('2-player and 3-player online games finish in sync', async () => {
+  for (const mode of [2, 3]) {
+    const { all, host } = await fourDeviceLobby(140 + mode, mode);
+    assert.strictEqual(all.length, mode);
+    host.startGame();
+    await finishAll(all);
+    closeAll(all);
+  }
+});
+
+test('rematch brings everyone back to the lobby, still seated, and a second game works', async () => {
+  const { all, host } = await fourDeviceLobby(151);
+  host.startGame();
+  await finishAll(all);
+  host.rematch();
+  await until(() => all.every((r) => r.lobby.phase === 'lobby' && !r.started), 2000, 'back to lobby');
+  all.forEach((r) => assert.ok(r.mySeat() >= 0));
+  host.startGame();
+  await finishAll(all);
+  closeAll(all);
+});
+
+test('joining a code nobody is in says so instead of hanging', async () => {
+  const net = makeNet({ seed: 161 });
+  const lonely = device(net, 'EMPTY', 'k-x', 'X');
+  let told = false; lonely.on('no-host', () => { told = true; });
+  await until(() => told, 2000, 'no-host event');
+  closeAll([lonely]);
+});
+
+(async () => {
+  let failed = 0;
+  for (const t of tests) {
+    try { await t.fn(); console.log('ok   ' + t.name); }
+    catch (e) { failed++; console.log('FAIL ' + t.name + '\n     ' + (e.stack || e).toString().split('\n').slice(0, 3).join('\n     ')); }
+  }
+  console.log(failed ? failed + ' failed' : 'net tests passed');
+  process.exit(failed ? 1 : 0);
+})();
