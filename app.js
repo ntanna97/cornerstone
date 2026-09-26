@@ -39,7 +39,7 @@
     game: null, sel: null, cursor: null, locked: false, hintMsg: '', banner: '',
     token: 0, running: false, humanTurn: false, viewColor: 0,
     start: 0, zoom: 1, cell: 24, anim: null, over: false,
-    online: null, onlineBotTimer: null, onlineName: '', handHidden: false,
+    online: null, onlineBotTimer: null, onlineName: '',
     connecting: false, announced: '', conn: 'ok', justPlaced: false, fit: null,
     closeUp: !!settings.closeUp, baseCell: 24, touchTapAt: 0
   };
@@ -718,7 +718,7 @@
     }
     if (!S.cursor) return { main: head, sub: 'Now tap the board to preview where it goes.', tone: '', c };
     const gs = ghostState();
-    if (gs.res.ok) return { main: '✓ It fits here', sub: S.hintMsg || 'Press “Place piece”, or tap the piece again.', tone: 'ok', c };
+    if (gs.res.ok) return { main: '✓ It fits here', sub: S.hintMsg || (isCompact() ? 'Tap the piece again, or press “Place piece” below your pieces.' : 'Press “Place piece”, or tap the piece again.'), tone: 'ok', c };
     return { main: '✗ Not here', sub: S.sel.noFit ? 'This piece does not fit anywhere right now. Try a different piece.'
       : gs.res.reason === 'start' ? `Your first piece must cover your corner square (${CORNER_NAME[c]}).` : REASONS[gs.res.reason], tone: 'bad', c };
   }
@@ -746,6 +746,22 @@
   function trayList(c) {
     return PIECES.map((p) => p.idx).filter((p) => !S.game.used[c][p]).sort((a, b) => PIECES[b].size - PIECES[a].size || a - b);
   }
+  // Phones: show each piece lying flat (never more than 3 squares tall), in a box sized to fit it.
+  // Same square size as before, much less empty space: the row is shorter and more pieces fit across.
+  function flatShape(p) {
+    let best = null;
+    for (const o of PIECES[p].orients) {
+      const w = Math.max(...o.map((q) => q[0])) + 1, h = Math.max(...o.map((q) => q[1])) + 1;
+      if (!best || h < best.h || (h === best.h && w < best.w)) best = { o, w, h };
+    }
+    return best;
+  }
+  function flatPieceSvg(p, c) {
+    const { o, w, h } = flatShape(p), H = 3.5, W = w + .36, ox = .18, oy = (H - h) / 2;
+    let svg = `<svg viewBox="0 0 ${W} ${H}" aria-hidden="true">`;
+    for (const [x, y] of o) svg += `<rect x="${x + ox + .04}" y="${y + oy + .04}" width=".92" height=".92" rx=".14" fill="${FILL[c]}" stroke="${DARK[c]}" stroke-width=".07"/>` + (settings.shapes ? glyphSvg(c, x + ox + .5, y + oy + .5, .2) : '');
+    return { svg: svg + '</svg>', ratio: W / H };
+  }
   function renderTray() {
     const g = S.game, c = S.viewColor, tray = $('#tray');
     const list = trayList(c);
@@ -762,7 +778,8 @@
       b.setAttribute('aria-label', pieceLabel(p) + (noFit ? ', does not fit anywhere right now' : ''));
       b.setAttribute('aria-pressed', S.sel && S.sel.p === p ? 'true' : 'false');
       b.disabled = !active;
-      b.innerHTML = pieceSvg(PIECES[p].base, c, 5, true);
+      if (isCompact()) { const f = flatPieceSvg(p, c); b.innerHTML = f.svg; b.style.setProperty('--ar', f.ratio.toFixed(3)); }
+      else { b.innerHTML = pieceSvg(PIECES[p].base, c, 5, true); b.style.removeProperty('--ar'); }
       b.addEventListener('click', () => selectPiece(p));
       tray.appendChild(b);
       if (isCompact() && S.sel && S.sel.p === p && b.scrollIntoView) b.scrollIntoView({ inline: 'nearest', block: 'nearest' });
@@ -772,7 +789,6 @@
     const active = myTurn();
     $('#screen-game').dataset.mine = active ? '1' : '0';
     $('#screen-game').dataset.picked = active && S.sel ? '1' : '0'; // phones: the bottom panel shows controls once a piece is picked
-    $('#btn-hint2').disabled = !active;
     $('#btn-rotate').disabled = !(active && S.sel);
     $('#btn-flip').disabled = !(active && S.sel);
     $('#btn-place').disabled = !(active && S.sel && S.cursor);
@@ -788,15 +804,7 @@
   const esc = (s) => String(s).replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
 
   $('#btn-rotate').onclick = rotate; $('#btn-flip').onclick = flip;
-  $('#btn-place').onclick = placeNow; $('#btn-hint').onclick = hint; $('#btn-hint2').onclick = hint;
-  $('#btn-change').onclick = () => { // back to the pieces (phones)
-    if (!myTurn()) return;
-    const was = S.sel && S.sel.p;
-    S.sel = null; S.cursor = null; S.locked = false; S.hintMsg = '';
-    renderAll(); say('Pick a piece.', false);
-    const back = Array.from(document.querySelectorAll('#tray .piece'))[0];
-    if (back) try { back.focus({ preventScroll: true }); } catch (e) {}
-  };
+  $('#btn-place').onclick = placeNow; $('#btn-hint').onclick = hint;
   function holdRepeat(btn, fn) { // tap = one square; press and hold = keep moving
     let t1 = null, t2 = null;
     const stop = () => { clearTimeout(t1); clearInterval(t2); t1 = t2 = null; };
@@ -813,13 +821,6 @@
   holdRepeat($('#dpad-down'), (q) => moveCursor(0, 1, q));
   holdRepeat($('#dpad-left'), (q) => moveCursor(-1, 0, q));
   holdRepeat($('#dpad-right'), (q) => moveCursor(1, 0, q));
-  $('#hand-toggle').onclick = () => {
-    S.handHidden = !S.handHidden;
-    $('#hand-body').hidden = S.handHidden;
-    $('#hand-toggle').innerHTML = `<span class="ico" aria-hidden="true">${S.handHidden ? '▴' : '▾'}</span> <span class="lbl">${S.handHidden ? 'Show' : 'Hide'}<span class="long"> controls</span></span>`;
-    $('#screen-game').dataset.hidehand = S.handHidden ? '1' : '0';
-    $('#hand-toggle').setAttribute('aria-expanded', String(!S.handHidden));
-  };
 
   // ---------- game over ----------
   function results() {

@@ -186,28 +186,33 @@ button{touch-action:manipulation;-webkit-user-select:none;user-select:none;-webk
 .tray-head .tray-title{margin:0}
 .short{display:none}
 
+/* ---------- the Suggest / Place row (desktop: under the controls) ---------- */
+.actions{display:grid;grid-template-columns:1fr 1.4fr;gap:.6rem}
+.actions .btn{min-height:3.4rem;font-size:1.05rem}
+#btn-hint .ico,#btn-place .ico{margin-right:.2rem}
+
 /* ---------- phones and tablets ---------- */
-#btn-change,#btn-hint2{display:none}
 @media (max-width: 999px) {
-  .long{display:none} .short{display:inline}
-  /* Top to bottom: [menu · status · zoom] (scrolled just out of view; scroll up to reach it),
-     then exactly one screen of: players, board (as big as fits), controls row, pieces row.
-     Every row below the board has a fixed height, so the board never changes size or moves. */
-  .screen.game{max-width:none;padding:.4rem .5rem;padding-bottom:max(.4rem, env(safe-area-inset-bottom));
-    --scores:2.75rem; --hand:3.4rem; --tray:4.3rem; --gap:.3rem;
-    /* the board is square, so it can't use more height than the screen is wide: any spare height
-       goes to bigger control buttons and bigger piece tiles instead of white bands around the board */
-    --vh:100vh; --avail:calc(var(--vh) - var(--scores) - var(--hand) - var(--tray) - 3 * var(--gap) - .9rem);
+  /* Top to bottom:
+       [menu · status · zoom]             just above the screen: scroll up
+       players                            \
+       board (as big as fits)              |  exactly one screen
+       arrow keys  (Turn ▲ Flip / ◀ ▼ ▶)   |
+       pieces (one row, no up/down)       /
+       [Suggest a move · Place piece]     just below the screen: scroll down to confirm
+     Every row has a fixed height, so the board never changes size or moves. */
+  .screen.game{max-width:none;padding:.4rem .5rem;padding-bottom:max(.6rem, env(safe-area-inset-bottom));
+    --scores:2.75rem; --hand:3.8rem; --tray:4.1rem; --gap:.3rem;
+    /* the board is square, so it can't use more height than the screen is wide: spare height makes the arrow keys bigger */
+    --vh:100vh; --avail:calc(var(--vh) - var(--scores) - var(--hand) - var(--tray) - 3 * var(--gap) - .8rem);
     --side:calc(100vw - 1rem);
     --extra:max(0px, calc(var(--avail) - var(--side)));
-    --handg:min(calc(var(--extra) * .4), 1rem);
-    --trayg:min(calc(var(--extra) - var(--handg)), .8rem);
+    --handg:min(var(--extra), 2.6rem);
     display:grid;gap:var(--gap);align-content:start;
     grid-template-columns:auto minmax(0,1fr) auto;
-    grid-template-rows:auto auto var(--scores) min(var(--avail), var(--side)) calc(var(--hand) + var(--handg)) calc(var(--tray) + var(--trayg));
-    grid-template-areas:"menu status view" "banner banner banner" "scores scores scores" "board board board" "hand hand hand" "tray tray tray"}
+    grid-template-rows:auto auto var(--scores) min(var(--avail), var(--side)) calc(var(--hand) + var(--handg)) var(--tray) auto;
+    grid-template-areas:"menu status view" "banner banner banner" "scores scores scores" "board board board" "hand hand hand" "tray tray tray" "act act act"}
   @supports (height:100svh) { .screen.game{--vh:100svh} } /* the screen height with the browser's bars showing */
-  .screen.game[data-hidehand="1"]{--hand:2.4rem}
   .screen.game .topbar,.screen.game .layout,.screen.game .boardcol,.screen.game .sidecol{display:contents}
   .screen.game .brand,#game-settings,.zoombar,.tray-head{display:none}
   #game-menu.btn,#view-toggle.btn{align-self:stretch;width:3.6rem;min-height:0;padding:.15rem .1rem;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.05rem;box-shadow:0 3px 0 var(--ink)}
@@ -231,32 +236,29 @@ button{touch-action:manipulation;-webkit-user-select:none;user-select:none;-webk
   /* board */
   .boardbox{grid-area:board}
   .boardwrap{height:100%;max-height:none;padding:4px;border-radius:12px}
-  /* controls: one row  ◀ ▲ ▼ ▶ Rotate Flip Hide Suggest Place */
-  .hand{grid-area:hand;padding:.3rem;border-radius:12px;display:grid;gap:.25rem;min-height:0;
-    grid-template-columns:repeat(8,minmax(0,1fr)) minmax(0,1.5fr);grid-template-rows:minmax(0,1fr);
-    grid-template-areas:"l u d r rot flip tog hint place"}
-  .hand-body,.hand .dpad,.hand .handbtns,.hand-extra{display:contents}
-  .hand-body[hidden]{display:none!important}
-  .screen.game[data-hidehand="1"] .hand{grid-template-columns:1fr;grid-template-areas:"tog"}
-  .screen.game[data-hidehand="1"] #btn-hint{display:none}
-  #dpad-left{grid-area:l}#dpad-up{grid-area:u}#dpad-down{grid-area:d}#dpad-right{grid-area:r}
-  #btn-rotate{grid-area:rot}#btn-flip{grid-area:flip}#hand-toggle{grid-area:tog}#btn-hint{grid-area:hint}#btn-place{grid-area:place}
-  .hand .btn{min-height:0;min-width:0;padding:0 .05rem;line-height:1;box-shadow:0 3px 0 var(--ink);border-radius:10px}
+  /* arrow keys, laid out like a keyboard:   Turn  ▲  Flip
+                                               ◀   ▼   ▶     */
+  .hand{grid-area:hand;padding:.35rem;border-radius:12px;display:grid;gap:.35rem;min-height:0;
+    grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));
+    grid-template-areas:"rot u flip" "l d r"}
+  .hand-body,.hand .dpad,.hand .handbtns{display:contents}
+  #dpad-left{grid-area:l}#dpad-up{grid-area:u}#dpad-down{grid-area:d}#dpad-right{grid-area:r}#btn-rotate{grid-area:rot}#btn-flip{grid-area:flip}
+  .hand .btn{min-height:0;min-width:0;padding:0 .2rem;line-height:1;box-shadow:0 3px 0 var(--ink);border-radius:12px}
   .hand .btn[disabled]{box-shadow:0 3px 0 #6b7480}
-  .dpad-btn{font-size:1.25rem!important}
-  #btn-rotate,#btn-flip,#hand-toggle,#btn-hint,#btn-place{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.1rem}
-  .hand .ico{font-size:1.1rem;line-height:1}
-  .hand .lbl{font-size:.64rem;line-height:1.05;white-space:nowrap;font-weight:700}
-  #btn-place .ico{font-size:1.3rem} #btn-place .lbl{font-size:.72rem;font-weight:700}
-  .screen.game[data-hidehand="1"] #hand-toggle{flex-direction:row;gap:.4rem}
-  .screen.game[data-hidehand="1"] #hand-toggle .lbl{font-size:.8rem}
-  /* pieces: one row, tiles exactly as tall as the bar (slides sideways, never up and down) */
+  .dpad-btn{font-size:1.6rem!important}
+  #btn-rotate,#btn-flip{display:flex;align-items:center;justify-content:center;gap:.35rem}
+  #btn-rotate .ico,#btn-flip .ico{font-size:1.3rem;line-height:1}
+  #btn-rotate .lbl,#btn-flip .lbl{font-size:.9rem;font-weight:700}
+  /* pieces: one row; each box fits its piece (lying flat, at most 3 squares tall), so the row is short and never scrolls up/down */
   .tray{grid-area:tray;padding:.3rem;border-radius:12px;min-height:0;overflow:hidden}
-  .trayGrid{display:flex;height:100%;overflow-x:auto;overflow-y:hidden;gap:.35rem;padding:0;align-items:stretch;
+  .trayGrid{display:flex;height:100%;overflow-x:auto;overflow-y:hidden;gap:.3rem;padding:0;align-items:stretch;
     scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;scrollbar-width:none}
   .trayGrid::-webkit-scrollbar{display:none}
-  .piece{height:100%;width:auto;aspect-ratio:1;flex:0 0 auto;padding:.15rem;scroll-snap-align:start}
+  .piece{height:100%;width:auto;aspect-ratio:var(--ar, 1);flex:0 0 auto;padding:.1rem;border-radius:10px;scroll-snap-align:start}
   .piece[aria-pressed=true]{box-shadow:inset 0 0 0 3px var(--ink)}
+  /* Suggest / Place: just below the screen */
+  .actions{grid-area:act;margin-top:.3rem}
+  .actions .btn{min-height:3.4rem;font-size:1rem;box-shadow:0 4px 0 var(--ink)}
 }
 @media (max-width: 999px) and (orientation: landscape) and (max-height: 520px) { /* phone turned sideways: fall back to a scrolling page */
   .screen.game{height:auto}
@@ -265,5 +267,4 @@ button{touch-action:manipulation;-webkit-user-select:none;user-select:none;-webk
 @media (max-width: 999px) { /* extra-large text: let the status wrap instead of cutting it off */
   html[data-text="xl"] .status-main{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.15}
   html[data-text="xl"] .status-sub{-webkit-line-clamp:1}
-  html[data-text="xl"] .hand .btn{font-size:.74rem}
 }

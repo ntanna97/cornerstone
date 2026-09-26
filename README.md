@@ -17,8 +17,10 @@ Built to be comfortable for older players and anyone with low vision.
 - Full keyboard play, screen-reader announcements, optional read-aloud turns
 - Board zoom up to 230%, reduce-movement option
 - On phones the screen shows, top to bottom: the four players (whose turn it is is highlighted), the
-  board as big as the screen allows, one row of controls (arrows, Turn, Flip, Hide, Hint, Place) and one
-  row of your pieces. The menu, status line and zoom button are just above: scroll up to reach them.
+  board as big as the screen allows, big arrow keys laid out like a keyboard (Rotate ▲ Flip / ◀ ▼ ▶), and
+  one row of your pieces (each in a snug box, so the row is short and only slides sideways). The menu,
+  status line and zoom button are just above: scroll up. "Suggest a move" and "Place piece" are just
+  below: scroll down to confirm (or tap the piece on the board again).
   Nothing changes size between turns, so the board never moves
 - Solid colour pieces. For colour-blind players, Settings can add a shape to each colour
   (circle, triangle, square, diamond)

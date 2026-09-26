@@ -37,6 +37,19 @@ let fails = 0; const ok = (cond, msg) => { console.log((cond ? 'ok   ' : 'FAIL '
   ok(s0.scoresTop >= 0 && s0.scoresTop < 16 && s0.statusBottom <= 4, `the game opens with the players at the top; menu/status/zoom are just above (players at ${s0.scoresTop}px, status ends at ${s0.statusBottom}px)`);
   ok(s0.piecesShown && s0.handShown && s0.trayBottom <= 664, `players, board, controls row and pieces row all on screen (pieces end at ${s0.trayBottom}px of 664)`);
   ok(s0.trayV[0] <= s0.trayV[1], `the pieces row never scrolls up and down (content ${s0.trayV[0]}px in a ${s0.trayV[1]}px bar)`);
+  const geo = await p.evaluate(() => {
+    const b = (sel) => { const r = document.querySelector(sel).getBoundingClientRect(); return { top: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; };
+    const tiles = Array.from(document.querySelectorAll('#tray .piece')).filter((t) => t.getBoundingClientRect().right <= innerWidth).length;
+    return { up: b('#dpad-up'), left: b('#dpad-left'), place: b('#btn-place'), hint: b('#btn-hint'), tiles, hide: !!document.querySelector('#hand-toggle') };
+  });
+  ok(!geo.hide, 'the Hide button is gone');
+  ok(geo.up.w >= 44 && geo.up.h >= 44 && geo.left.w >= 44 && geo.left.h >= 44, `arrow keys are big (▲ ${geo.up.w}x${geo.up.h}px, ◀ ${geo.left.w}x${geo.left.h}px)`);
+  ok(geo.tiles >= 4, `the pieces row shows ${geo.tiles} whole pieces at once`);
+  ok(geo.place.top >= 664 && geo.hint.top >= 664, `Suggest and Place sit just below the screen (Place starts at ${geo.place.top}px on a 664px screen)`);
+  await p.evaluate(() => window.scrollBy(0, 200)); await sleep(150);
+  const pb = await p.$eval('#btn-place', (e) => Math.round(e.getBoundingClientRect().bottom));
+  ok(pb <= 664, `scrolling down brings Suggest and Place into view (Place ends at ${pb}px)`);
+  await p.evaluate(() => window.scrollTo(0, 88)); await sleep(150);
   await p.tap('#tray .piece'); await sleep(300);
   let s = await S();
   ok(!s.closeUp && s.cell === s0.cell && s.sl === s0.sl && s.st === s0.st, `picking a piece leaves the view alone (still the whole board, ${s.cell}px squares)`);
@@ -79,11 +92,7 @@ let fails = 0; const ok = (cond, msg) => { console.log((cond ? 'ok   ' : 'FAIL '
   await p.tap('#dpad-right'); await sleep(100); const s2 = await S();
   ok(s2.cursor.x === s.cursor.x + 1, 'a single tap on ▶ moves exactly one square');
 
-  // 6. Hide / Show the controls; menu dialog
-  await p.tap('#hand-toggle'); await sleep(250); s = await S();
-  ok(s.bodyHidden && /Show/.test(await p.$eval('#hand-toggle', (e) => e.textContent)), 'Hide folds the controls away, leaving a Show button');
-  await p.tap('#hand-toggle'); await sleep(250); s = await S();
-  ok(!s.bodyHidden, 'Show brings the controls back');
+  // 6. menu dialog
   await p.tap('#game-menu'); await sleep(150);
   ok(await p.$eval('#dlg-menu', (d) => d.open), 'Menu opens the game menu');
   await p.tap('#dlg-menu [data-close]'); await sleep(150);

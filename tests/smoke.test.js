@@ -50,11 +50,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   if (S.cursor.y !== Math.min(19, before.y + 1)) throw new Error('dpad-down did not move the cursor');
   // hide/show the bottom control panel
   if ($('#hand-body').hidden) throw new Error('controls should start visible');
-  $('#hand-toggle').click();
-  if (!$('#hand-body').hidden) throw new Error('hand-toggle should hide the controls');
-  if (!/show/i.test($('#hand-toggle').textContent)) throw new Error('toggle label should now say Show controls');
-  $('#hand-toggle').click();
-  if ($('#hand-body').hidden) throw new Error('hand-toggle should show the controls again');
+if ($('#hand-toggle')) throw new Error('the Hide button should be gone');
   // illegal placement shows a reason
   $('#board').dispatchEvent(new w.MouseEvent('click', { clientX: 0, clientY: 0 }));
   if (!/first piece/.test($('#status-sub').textContent)) throw new Error('expected first-piece reason, got: ' + $('#status-sub').textContent);
