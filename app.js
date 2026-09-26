@@ -19,9 +19,10 @@
     set(k, v) { try { localStorage.setItem('cornerstone.' + k, JSON.stringify(v)); } catch (e) {} }
   };
   const settings = Object.assign({
-    text: 'large', contrast: false, shapes: true, corners: true,
+    text: 'large', contrast: false, shapes: false, corners: true,
     sound: true, speak: false, motion: false, speed: 'normal'
   }, store.get('settings', {}));
+  if (!(settings.v >= 2)) { settings.shapes = false; settings.v = 2; } // v2: solid colour pieces by default
   const BOT_NAMES = ['Marigold', 'Juniper', 'Basil'];
   const config = Object.assign({
     mode: 4,
@@ -149,6 +150,7 @@
   function show(id) {
     ['menu', 'setup', 'online', 'lobby', 'game'].forEach((n) => { $('#screen-' + n).hidden = n !== id; });
     window.scrollTo(0, 0);
+    if (id === 'game' && isCompact()) requestAnimationFrame(() => { roomToScroll(); window.scrollTo(0, playersTop()); });
     const h = $('#screen-' + id + ' h1, #screen-' + id + ' h2');
     if (h) { h.setAttribute('tabindex', '-1'); h.focus({ preventScroll: true }); }
   }
@@ -187,7 +189,7 @@
     for (const p of cells) for (const [x, y] of p.pts) {
       const X = x + p.at[0], Y = y + p.at[1];
       s += `<rect x="${X + .04}" y="${Y + .04}" width=".92" height=".92" rx=".16" fill="${FILL[p.c]}" stroke="#fff" stroke-width=".07"/>`;
-      s += glyphSvg(p.c, X + .5, Y + .5, .2);
+      if (settings.shapes) s += glyphSvg(p.c, X + .5, Y + .5, .2);
     }
     $('#logo').innerHTML = s;
   }
@@ -520,6 +522,15 @@
 
   // ---------- sizing ----------
   const isCompact = () => !!(window.matchMedia && window.matchMedia('(max-width: 999px)').matches);
+  // Phones: the game opens scrolled so the players sit at the top; menu, status and zoom are just above.
+  // Make the page exactly tall enough for that scroll, even when there's spare room at the bottom.
+  const playersTop = () => Math.max(0, $('.scoreboard').getBoundingClientRect().top + window.scrollY - 6);
+  function roomToScroll() {
+    const g = $('#screen-game');
+    g.style.minHeight = '';
+    if (!isCompact() || g.hidden) return;
+    g.style.minHeight = Math.ceil(playersTop() - g.offsetTop + window.innerHeight) + 'px';
+  }
   function fit() {
     const wrap = $('#boardwrap');
     if (isCompact()) {
@@ -571,7 +582,7 @@
   }
   $('#zoom-in').onclick = () => { zoomIdx = Math.min(ZOOMS.length - 1, zoomIdx + 1); fit(); draw(); scrollToCursor(); };
   $('#zoom-out').onclick = () => { zoomIdx = Math.max(0, zoomIdx - 1); fit(); draw(); };
-  let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (S.game) { fit(); draw(); } }, 120); });
+  let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (S.game) { fit(); draw(); roomToScroll(); } }, 120); });
 
   // ---------- drawing ----------
   function rr(x, y, w, h, r) {
@@ -594,7 +605,6 @@
     ctx.globalAlpha = alpha == null ? 1 : alpha;
     ctx.fillStyle = FILL[c]; rr(cx - w / 2, cy - w / 2, w, w, cs * .14); ctx.fill();
     ctx.lineWidth = settings.contrast ? 2.5 : 1.5; ctx.strokeStyle = settings.contrast ? '#000' : DARK[c]; ctx.stroke();
-    ctx.fillStyle = 'rgba(255,255,255,.2)'; rr(cx - w * .32, cy - w * .32, w * .64, w * .64, cs * .1); ctx.fill();
     if (settings.shapes) glyphCanvas(c, cx, cy, cs * .2 * s);
     ctx.globalAlpha = 1;
   }
@@ -806,7 +816,8 @@
   $('#hand-toggle').onclick = () => {
     S.handHidden = !S.handHidden;
     $('#hand-body').hidden = S.handHidden;
-    $('#hand-toggle').innerHTML = S.handHidden ? 'Show<span class="long"> controls</span>' : 'Hide<span class="long"> controls</span>';
+    $('#hand-toggle').innerHTML = `<span class="ico" aria-hidden="true">${S.handHidden ? '▴' : '▾'}</span> <span class="lbl">${S.handHidden ? 'Show' : 'Hide'}<span class="long"> controls</span></span>`;
+    $('#screen-game').dataset.hidehand = S.handHidden ? '1' : '0';
     $('#hand-toggle').setAttribute('aria-expanded', String(!S.handHidden));
   };
 

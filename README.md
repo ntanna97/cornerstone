@@ -8,7 +8,6 @@ Built to be comfortable for older players and anyone with low vision.
 
 - Atkinson Hyperlegible typeface (designed by the Braille Institute for low-vision readers)
 - Three text sizes, plus a high-contrast mode
-- Colour is never the only signal: every colour has its own shape (circle, triangle, square, diamond)
 - Large tap targets and a "Place piece" confirm step
 - On-screen ▲ ◀ ▶ ▼ buttons to move a selected piece one square at a time, no dragging required
 - A collapsible bottom control panel ("Hide controls") to free up screen space on small phones
@@ -17,12 +16,15 @@ Built to be comfortable for older players and anyone with low vision.
 - Plain-language reasons when a move isn't allowed ("It touches one of your own pieces along a side...")
 - Full keyboard play, screen-reader announcements, optional read-aloud turns
 - Board zoom up to 230%, reduce-movement option
-- On phones the board uses the full width and nothing scrolls. Below it, one panel shows your pieces;
-  once you pick one it shows the controls (arrows, Rotate, Flip, Change piece, Place). The panel never
-  changes size, so the board never moves
-- The screen only changes when you ask: nothing zooms by itself. Picking a piece shows it on the board,
-  in a spot where it fits, with a thick gold border (the same gold as its tile). The zoom button is
-  there if you want bigger squares, and your choice is remembered
+- On phones the screen shows, top to bottom: the four players (whose turn it is is highlighted), the
+  board as big as the screen allows, one row of controls (arrows, Turn, Flip, Hide, Hint, Place) and one
+  row of your pieces. The menu, status line and zoom button are just above: scroll up to reach them.
+  Nothing changes size between turns, so the board never moves
+- Solid colour pieces. For colour-blind players, Settings can add a shape to each colour
+  (circle, triangle, square, diamond)
+- The screen only changes when you ask: nothing zooms by itself. The piece you're placing has a thick
+  gold border (the same gold as its tile). The zoom button is there for bigger squares, and your choice
+  is remembered
 - Taps don't need to be precise: tap near where you want a piece and it snaps to the closest spot it
   fits (turning it if needed). You can also drag the piece with a finger, or hold an arrow to keep moving
 

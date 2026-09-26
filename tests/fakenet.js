@@ -17,9 +17,10 @@ function makeNet(opts) {
   let dropRule = null;
   const stats = { sent: 0, dropped: 0 };
   const room = (code) => { if (!rooms.has(code)) rooms.set(code, new Map()); return rooms.get(code); };
-  function later(pairKey, fn) {
+  function later(pairKey, fn, delay) {
     const prev = chains.get(pairKey) || Promise.resolve();
-    const next = prev.then(() => new Promise((r) => setTimeout(r, minDelay + Math.floor(rand() * (maxDelay - minDelay + 1))))).then(fn);
+    const d = delay != null ? delay : minDelay + Math.floor(rand() * (maxDelay - minDelay + 1));
+    const next = prev.then(() => new Promise((r) => setTimeout(r, d))).then(fn);
     chains.set(pairKey, next.catch(() => {}));
   }
   function presenceOf(code) { return Array.from(room(code).values()).filter((m) => m.online).map((m) => Object.assign({ key: m.key }, m.meta)); }
@@ -49,7 +50,8 @@ function makeNet(opts) {
             if (q === m || !q.online) return;
             stats.sent++;
             if (dropRule && dropRule(event, data, key, q.key)) { stats.dropped++; return; }
-            later(m.id + '>' + q.id, () => { if (q.online && m.id) q.msgCbs.forEach((cb) => cb(event, JSON.parse(JSON.stringify(data)), key)); });
+            const slow = opts.delayFor ? opts.delayFor(key, q.key) : null; // lets a test make one link slower than the rest
+            later(m.id + '>' + q.id, () => { if (q.online && m.id) q.msgCbs.forEach((cb) => cb(event, JSON.parse(JSON.stringify(data)), key)); }, slow);
           });
         },
         leave() { m.online = false; pushPresence(code); }

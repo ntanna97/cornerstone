@@ -186,61 +186,77 @@ button{touch-action:manipulation;-webkit-user-select:none;user-select:none;-webk
 .tray-head .tray-title{margin:0}
 .short{display:none}
 
-/* ---------- phones and tablets: everything on one screen, nothing to scroll during your turn ---------- */
+/* ---------- phones and tablets ---------- */
 #btn-change,#btn-hint2{display:none}
 @media (max-width: 999px) {
   .long{display:none} .short{display:inline}
-  /* The board gets the full width. Below it, one fixed-height panel shows EITHER your pieces (pick one)
-     OR the controls for the piece you picked. Fixed height = the board never moves or changes size. */
+  /* Top to bottom: [menu · status · zoom] (scrolled just out of view; scroll up to reach it),
+     then exactly one screen of: players, board (as big as fits), controls row, pieces row.
+     Every row below the board has a fixed height, so the board never changes size or moves. */
   .screen.game{max-width:none;padding:.4rem .5rem;padding-bottom:max(.4rem, env(safe-area-inset-bottom));
-    height:100vh;height:100dvh;display:grid;gap:.3rem;
+    --scores:2.75rem; --hand:3.4rem; --tray:4.3rem; --gap:.3rem;
+    /* the board is square, so it can't use more height than the screen is wide: any spare height
+       goes to bigger control buttons and bigger piece tiles instead of white bands around the board */
+    --vh:100vh; --avail:calc(var(--vh) - var(--scores) - var(--hand) - var(--tray) - 3 * var(--gap) - .9rem);
+    --side:calc(100vw - 1rem);
+    --extra:max(0px, calc(var(--avail) - var(--side)));
+    --handg:min(calc(var(--extra) * .4), 1rem);
+    --trayg:min(calc(var(--extra) - var(--handg)), .8rem);
+    display:grid;gap:var(--gap);align-content:start;
     grid-template-columns:auto minmax(0,1fr) auto;
-    grid-template-rows:auto auto auto minmax(0,1fr) 6.8rem;
-    grid-template-areas:"menu status view" "banner banner banner" "scores scores scores" "board board board" "dock dock dock"}
+    grid-template-rows:auto auto var(--scores) min(var(--avail), var(--side)) calc(var(--hand) + var(--handg)) calc(var(--tray) + var(--trayg));
+    grid-template-areas:"menu status view" "banner banner banner" "scores scores scores" "board board board" "hand hand hand" "tray tray tray"}
+  @supports (height:100svh) { .screen.game{--vh:100svh} } /* the screen height with the browser's bars showing */
+  .screen.game[data-hidehand="1"]{--hand:2.4rem}
   .screen.game .topbar,.screen.game .layout,.screen.game .boardcol,.screen.game .sidecol{display:contents}
-  .screen.game .brand,#game-settings,.zoombar,#hand-toggle{display:none}
+  .screen.game .brand,#game-settings,.zoombar,.tray-head{display:none}
   #game-menu.btn,#view-toggle.btn{align-self:stretch;width:3.6rem;min-height:0;padding:.15rem .1rem;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.05rem;box-shadow:0 3px 0 var(--ink)}
   #game-menu{grid-area:menu} #view-toggle{grid-area:view}
   #game-menu .ico,#view-toggle .ico{font-size:1.15rem;line-height:1}
   #game-menu .lbl,#view-toggle .lbl{font-size:.62rem;line-height:1.1;white-space:nowrap}
   #online-banner{grid-area:banner;margin:0;padding:.3rem .6rem;font-size:.8rem}
-  #status{grid-area:status;padding:.3rem .55rem;min-width:0;border-radius:12px;height:3.7rem;align-items:center} /* fixed height: the board never jumps */
+  #status{grid-area:status;padding:.3rem .55rem;min-width:0;border-radius:12px;height:3.7rem;align-items:center}
   #status .chip{display:none}
   #status > div{min-width:0}
   .status-main{font-size:.95rem;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .status-sub{font-size:.78rem;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-  /* scores: name, then squares left */
-  .scoreboard{grid-area:scores;grid-template-columns:repeat(4,minmax(0,1fr));gap:.3rem}
-  .sc{padding:.15rem .35rem .15rem .45rem;border-radius:9px;display:block;border-left-width:.5rem}
+  /* players */
+  .scoreboard{grid-area:scores;grid-template-columns:repeat(4,minmax(0,1fr));gap:.3rem;padding:0 .15rem}
+  .sc{padding:.15rem .35rem .15rem .45rem;border-radius:9px;display:flex;align-items:center;border-left-width:.5rem;min-height:0}
   .sc .chip{display:none}
   .sc > div{min-width:0}
   .sc-name{font-size:.72rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2}
   .sc-left{font-size:.72rem;white-space:nowrap;line-height:1.2}
   .sc.now{box-shadow:0 0 0 3px var(--gold),0 0 0 5px var(--ink)}
+  /* board */
   .boardbox{grid-area:board}
   .boardwrap{height:100%;max-height:none;padding:4px;border-radius:12px}
-  /* the panel, state 1: your pieces */
-  .tray{grid-area:dock;padding:.35rem;border-radius:12px;display:flex;flex-direction:column;gap:.3rem;min-height:0;overflow:hidden}
-  .tray-head{margin:0;display:flex;align-items:center;gap:.4rem}
-  .tray-title{font-size:.85rem;flex:1 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  #btn-hint2{display:inline-block;min-height:2.3rem;padding:.1rem .7rem;font-size:.82rem;white-space:nowrap;flex:none}
-  .trayGrid{display:flex;overflow-x:auto;gap:.4rem;padding:2px 2px .25rem;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;flex:1 1 auto;align-items:center}
-  .piece{flex:0 0 3.4rem;height:3.4rem;padding:.2rem;scroll-snap-align:start}
-  /* the panel, state 2: controls for the picked piece */
-  .hand{grid-area:dock;padding:.4rem;border-radius:12px;display:none;gap:.4rem;
-    grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:1fr 1fr;
-    grid-template-areas:"l l u u d d r r rot rot flip flip" "chg chg chg chg hint hint hint place place place place place"}
-  .screen.game[data-picked="1"] .hand{display:grid}
-  .screen.game[data-picked="1"] .tray{display:none}
+  /* controls: one row  ◀ ▲ ▼ ▶ Rotate Flip Hide Suggest Place */
+  .hand{grid-area:hand;padding:.3rem;border-radius:12px;display:grid;gap:.25rem;min-height:0;
+    grid-template-columns:repeat(8,minmax(0,1fr)) minmax(0,1.5fr);grid-template-rows:minmax(0,1fr);
+    grid-template-areas:"l u d r rot flip tog hint place"}
   .hand-body,.hand .dpad,.hand .handbtns,.hand-extra{display:contents}
+  .hand-body[hidden]{display:none!important}
+  .screen.game[data-hidehand="1"] .hand{grid-template-columns:1fr;grid-template-areas:"tog"}
+  .screen.game[data-hidehand="1"] #btn-hint{display:none}
   #dpad-left{grid-area:l}#dpad-up{grid-area:u}#dpad-down{grid-area:d}#dpad-right{grid-area:r}
-  #btn-rotate{grid-area:rot}#btn-flip{grid-area:flip}#btn-place{grid-area:place}#btn-change{grid-area:chg;display:block}#btn-hint{grid-area:hint}
-  .hand .btn{min-height:0;min-width:0;padding:.1rem .15rem;font-size:.85rem;line-height:1.1}
-  .dpad-btn{font-size:1.35rem!important}
-  #btn-rotate,#btn-flip{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0}
-  #btn-rotate .ico,#btn-flip .ico{font-size:1.2rem;line-height:1}
-  #btn-rotate .lbl,#btn-flip .lbl{font-size:.62rem;line-height:1.1}
-  #btn-place{font-size:1rem}
+  #btn-rotate{grid-area:rot}#btn-flip{grid-area:flip}#hand-toggle{grid-area:tog}#btn-hint{grid-area:hint}#btn-place{grid-area:place}
+  .hand .btn{min-height:0;min-width:0;padding:0 .05rem;line-height:1;box-shadow:0 3px 0 var(--ink);border-radius:10px}
+  .hand .btn[disabled]{box-shadow:0 3px 0 #6b7480}
+  .dpad-btn{font-size:1.25rem!important}
+  #btn-rotate,#btn-flip,#hand-toggle,#btn-hint,#btn-place{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.1rem}
+  .hand .ico{font-size:1.1rem;line-height:1}
+  .hand .lbl{font-size:.64rem;line-height:1.05;white-space:nowrap;font-weight:700}
+  #btn-place .ico{font-size:1.3rem} #btn-place .lbl{font-size:.72rem;font-weight:700}
+  .screen.game[data-hidehand="1"] #hand-toggle{flex-direction:row;gap:.4rem}
+  .screen.game[data-hidehand="1"] #hand-toggle .lbl{font-size:.8rem}
+  /* pieces: one row, tiles exactly as tall as the bar (slides sideways, never up and down) */
+  .tray{grid-area:tray;padding:.3rem;border-radius:12px;min-height:0;overflow:hidden}
+  .trayGrid{display:flex;height:100%;overflow-x:auto;overflow-y:hidden;gap:.35rem;padding:0;align-items:stretch;
+    scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .trayGrid::-webkit-scrollbar{display:none}
+  .piece{height:100%;width:auto;aspect-ratio:1;flex:0 0 auto;padding:.15rem;scroll-snap-align:start}
+  .piece[aria-pressed=true]{box-shadow:inset 0 0 0 3px var(--ink)}
 }
 @media (max-width: 999px) and (orientation: landscape) and (max-height: 520px) { /* phone turned sideways: fall back to a scrolling page */
   .screen.game{height:auto}

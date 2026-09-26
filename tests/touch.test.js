@@ -23,21 +23,25 @@ let fails = 0; const ok = (cond, msg) => { console.log((cond ? 'ok   ' : 'FAIL '
       sl: w.scrollLeft, st: w.scrollTop, status: document.querySelector('#status-main').textContent, handShown: getComputedStyle(document.querySelector('#hand')).display !== 'none',
       bodyHidden: document.querySelector('#hand-body').hidden, boardH: Math.round(w.getBoundingClientRect().height), boardTop: Math.round(w.getBoundingClientRect().top),
       canvasW: Math.round(document.querySelector('#board').getBoundingClientRect().width), wrapW: Math.round(w.clientWidth), wrapH: Math.round(w.clientHeight),
-      piecesShown: getComputedStyle(document.querySelector('.tray')).display !== 'none', pageH: document.documentElement.scrollHeight }; });
+      piecesShown: getComputedStyle(document.querySelector('.tray')).display !== 'none', pageH: document.documentElement.scrollHeight,
+      scrollY: Math.round(window.scrollY), scoresTop: Math.round(document.querySelector('.scoreboard').getBoundingClientRect().top),
+      statusBottom: Math.round(document.querySelector('#status').getBoundingClientRect().bottom),
+      trayBottom: Math.round(document.querySelector('.tray').getBoundingClientRect().bottom),
+      trayV: [document.querySelector('#tray').scrollHeight, document.querySelector('#tray').clientHeight] }; });
   // screen position of a board square
   const sq = (x, y) => p.evaluate((x, y) => { const c = document.querySelector('#board').getBoundingClientRect(), n = window.__cornerstone.S.cell; return { x: c.left + (x + .5) * n, y: c.top + (y + .5) * n }; }, x, y);
 
   // 1. picking a piece shows it on the whole board, in a spot where it fits; the view does NOT change by itself
   let s0 = await S();
   ok(s0.canvasW >= Math.min(s0.wrapW, s0.wrapH) - 12, `the board fills its space (${s0.canvasW}px in a ${s0.wrapW}x${s0.wrapH} area, ${s0.cell}px squares)`);
-  ok(s0.piecesShown && !s0.handShown, 'before picking: the bottom panel shows your pieces');
+  ok(s0.scoresTop >= 0 && s0.scoresTop < 16 && s0.statusBottom <= 4, `the game opens with the players at the top; menu/status/zoom are just above (players at ${s0.scoresTop}px, status ends at ${s0.statusBottom}px)`);
+  ok(s0.piecesShown && s0.handShown && s0.trayBottom <= 664, `players, board, controls row and pieces row all on screen (pieces end at ${s0.trayBottom}px of 664)`);
+  ok(s0.trayV[0] <= s0.trayV[1], `the pieces row never scrolls up and down (content ${s0.trayV[0]}px in a ${s0.trayV[1]}px bar)`);
   await p.tap('#tray .piece'); await sleep(300);
   let s = await S();
   ok(!s.closeUp && s.cell === s0.cell && s.sl === s0.sl && s.st === s0.st, `picking a piece leaves the view alone (still the whole board, ${s.cell}px squares)`);
-  ok(s.handShown && !s.piecesShown, 'after picking: the bottom panel shows the controls instead');
-  ok(s.boardH === s0.boardH && s.boardTop === s0.boardTop, `the board does not move or resize when the panel swaps (${s0.boardTop}/${s0.boardH} -> ${s.boardTop}/${s.boardH})`);
+  ok(s.boardH === s0.boardH && s.boardTop === s0.boardTop, `the board does not move or resize when a piece is picked (${s0.boardTop}/${s0.boardH} -> ${s.boardTop}/${s.boardH})`);
   ok(/fits/.test(s.status), `the piece starts in a spot where it fits ("${s.status}")`);
-  ok(s.pageH <= 664, `no page scrolling (page ${s.pageH}px tall on a 664px screen)`);
 
   // 2. on the whole board, a sloppy tap one square off a legal spot still snaps into place
   await p.evaluate(() => { const S = window.__cornerstone.S; S.cursor = { x: 5, y: 12 }; }); // move the ghost somewhere illegal first
@@ -75,13 +79,11 @@ let fails = 0; const ok = (cond, msg) => { console.log((cond ? 'ok   ' : 'FAIL '
   await p.tap('#dpad-right'); await sleep(100); const s2 = await S();
   ok(s2.cursor.x === s.cursor.x + 1, 'a single tap on ▶ moves exactly one square');
 
-  // 6. "Change piece" goes back to the pieces; menu dialog
-  const h0 = s.boardH, t0 = s.boardTop;
-  await p.tap('#btn-change'); await sleep(250); s = await S();
-  ok(s.piecesShown && !s.handShown && !s.sel, '"Change piece" puts the pieces back in the panel');
-  ok(s.boardH === h0 && s.boardTop === t0, 'and the board still does not move');
-  await p.tap('#tray .piece'); await sleep(250); s = await S();
-  ok(s.handShown && s.sel, 'picking again brings the controls back');
+  // 6. Hide / Show the controls; menu dialog
+  await p.tap('#hand-toggle'); await sleep(250); s = await S();
+  ok(s.bodyHidden && /Show/.test(await p.$eval('#hand-toggle', (e) => e.textContent)), 'Hide folds the controls away, leaving a Show button');
+  await p.tap('#hand-toggle'); await sleep(250); s = await S();
+  ok(!s.bodyHidden, 'Show brings the controls back');
   await p.tap('#game-menu'); await sleep(150);
   ok(await p.$eval('#dlg-menu', (d) => d.open), 'Menu opens the game menu');
   await p.tap('#dlg-menu [data-close]'); await sleep(150);
@@ -93,10 +95,7 @@ let fails = 0; const ok = (cond, msg) => { console.log((cond ? 'ok   ' : 'FAIL '
   while (Date.now() < until) {
     s = await S(); if (s.over) break;
     if (!s.humanTurn) { await sleep(40); continue; }
-    if (s.handShown && s.sel) { // a piece is already picked: place it (or go back to the pieces if it doesn't fit)
-      if (!(await p.$eval('#btn-place', (e) => e.disabled))) { await p.tap('#btn-place'); turns++; } else await p.tap('#btn-change');
-      await sleep(120); continue;
-    }
+    if (s.sel && /fits/.test(s.status)) { await p.tap('#btn-place'); turns++; await sleep(120); continue; } // a piece is picked and fits: place it
     const idx = await p.evaluate(() => Array.from(document.querySelectorAll('#tray .piece')).findIndex((b) => !b.classList.contains('nofit') && !b.disabled));
     if (idx < 0) { await sleep(40); continue; }
     const before = await S();

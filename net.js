@@ -97,6 +97,7 @@
     let log = {};             // moves applied this game, by sequence number (for re-sending)
     let pending = {};         // moves that arrived before the one they follow
     let gapTimer = null;
+    let early = {};           // moves that arrived before their game did (by game id): held, then applied when it arrives
     let closed = false;
     let wantSeat = opts.autoSeat !== false;
     let presenceSeen = !!opts.host;   // until my first presence list arrives, trust whoever sent me the room state
@@ -327,7 +328,10 @@
     self.proposePass = (color) => propose({ color, pass: true });
 
     function onMove(m) {
-      if (!self.started || m.gid !== self.lobby.gameId) return;
+      if (!self.started || m.gid !== self.lobby.gameId) { // e.g. a player's reply overtook the host's "game started" message
+        if (m.gid) { const b = early[m.gid] = early[m.gid] || {}; if (Object.keys(b).length < 200) b[m.n] = m; }
+        return;
+      }
       const g = self.game;
       if (m.n <= self.moveN) { // duplicate or re-send; only interesting if it disagrees with what I have
         if (m.n === self.moveN && m.h && m.h !== fingerprint(g, self.moveN)) { emit('debug', 'dup-mismatch n=' + m.n); outOfSync(); }
@@ -416,7 +420,20 @@
       if (sameGame && !p.force && p.n === self.moveN && fingerprint(E.deserialize(p.game), p.n) === fingerprint(self.game, self.moveN)) return false; // nothing changed
       if (!self.lobby || p.lobby.rev >= self.lobby.rev) self.lobby = clone(p.lobby);
       self.game = E.deserialize(p.game); self.moveN = p.n; log = {}; pending = {};
+      // apply any moves for this game that got here first, before telling anyone the game is ready
+      const held = early[self.lobby.gameId]; early = {};
+      if (held) {
+        let m;
+        while ((m = held[self.moveN + 1])) {
+          const g = self.game;
+          const ok = m.color === g.turn && !g.out[m.color] && (m.pass ? !E.hasMove(g, m.color) : E.check(g, m.color, m.cells).ok);
+          if (!ok) break;
+          applyMove(m);
+          if (m.h && m.h !== fingerprint(g, self.moveN)) { outOfSync(); break; }
+        }
+      }
       emit(sameGame ? 'sync' : 'start', self.lobby, self.game);
+      if (held) Object.values(held).filter((x) => x.n > self.moveN).sort((a, b) => a.n - b.n).forEach((x) => onMove(x)); // any after a gap: normal holding
       return true;
     }
 

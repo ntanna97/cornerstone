@@ -41,6 +41,8 @@ const finished = (r) => r.started && r.game.out.every(Boolean);
 async function finishAll(rooms, ms, what) {
   await until(() => rooms.every(finished), ms || 20000, what || 'game to finish on every device');
   await until(() => rooms.every((r) => r.moveN === rooms[0].moveN), 3000, 'everyone to agree on the move count');
+  // a correction for a conflict on the very last move may still be on its way: allow it to land, then insist on agreement
+  try { await until(() => rooms.every((r) => fp(r) === fp(rooms[0])), 3000, 'boards to converge'); } catch (e) {}
   const f = fp(rooms[0]);
   rooms.forEach((r, i) => assert.strictEqual(fp(r), f, 'device ' + i + ' ended with a different board'));
 }
@@ -145,6 +147,23 @@ test("a device whose board silently drifted is corrected, and the host still tak
   await finishAll(all, 20000, 'game to finish after the drift');
   assert.ok(drifted, 'the drift was actually injected');
   assert.ok(hostSaw.some((m) => /hash-mismatch/.test(m)), 'the host noticed the mismatch: ' + hostSaw.join(', '));
+  closeAll(all);
+});
+
+test("a move that overtakes the host's 'game started' message is kept, not lost (slow link to one device)", async () => {
+  // host -> Bea is slow: Alex's reply to the host's first move reaches Bea before Bea even knows the game started
+  const net = makeNet({ seed: 191, minDelay: 1, maxDelay: 3, delayFor: (from, to) => (from === 'k-host' && to === 'k-b' ? 40 : null) });
+  const code = 'EARLY';
+  const host = device(net, code, 'k-host', 'Neil', { host: true, instant: true });
+  const others = [];
+  for (const [k, n] of [['k-a', 'Alex'], ['k-b', 'Bea'], ['k-c', 'Cy']]) { others.push(device(net, code, k, n, { instant: true })); await sleep(60); }
+  const all = [host, ...others];
+  await until(() => all.every((r) => r.mySeat() >= 0) && all.every((r) => r.lobby.rev === host.lobby.rev), 3000, 'seated');
+  const asked = []; host.on('debug', (m) => { if (/hello from/.test(m)) asked.push(m); });
+  let resyncs = 0; all.forEach((r) => r.on('sync', () => resyncs++));
+  host.startGame();
+  await finishAll(all);
+  assert.strictEqual(resyncs, 0, 'nobody should need catching up: ' + asked.join(', '));
   closeAll(all);
 });
 
@@ -336,7 +355,7 @@ test('joining a code nobody is in says so instead of hanging', async () => {
 
 (async () => {
   let failed = 0;
-  for (const t of tests) {
+  for (const t of tests.filter((t) => !process.env.ONLY || t.name.includes(process.env.ONLY))) {
     try { await t.fn(); console.log('ok   ' + t.name); }
     catch (e) { failed++; console.log('FAIL ' + t.name + '\n     ' + (e.stack || e).toString().split('\n').slice(0, 3).join('\n     ')); }
   }
