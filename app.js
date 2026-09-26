@@ -164,6 +164,7 @@
   function applySettings() {
     document.documentElement.dataset.text = settings.text;
     document.body.classList.toggle('hc', !!settings.contrast);
+    document.body.classList.toggle('reduce-motion', reducedMotion());
     store.set('settings', settings);
     if (S.game) { fit(); renderAll(); }
   }
@@ -232,7 +233,7 @@
 
   // ---------- new game ----------
   function startGame() {
-    S.token++;
+    S.token++; resetOver(); clearUndo();
     const g = E.newGame(); g.meta = { sharedCount: 0, moves: 0, last: null };
     S.game = g; S.sel = null; S.cursor = null; S.locked = false; S.hintMsg = ''; S.banner = '';
     S.over = false; S.running = false; S.humanTurn = false; S.start = Date.now(); S.anim = null;
@@ -249,8 +250,8 @@
   // ---------- turn loop ----------
   function botDelay() { return window.__testFastBots ? 4 : ({ slow: 1500, normal: 900, fast: 350 }[settings.speed] || 900); }
   async function runTurns() {
-    if (S.running) return;
-    S.running = true; const token = S.token;
+    if (S.running && S.runToken === S.token) return;
+    S.running = true; S.runToken = S.token; const token = S.token;
     try {
       while (token === S.token) {
         const g = S.game;
@@ -280,7 +281,7 @@
         say(`${seat.name} played the ${pieceLabel(mv.p)} as ${COLORS[c].name}.`);
         await sleep(humansAllOut(g) ? 60 : 350);
       }
-    } finally { S.running = false; }
+    } finally { if (S.runToken === token) S.running = false; }
   }
   function beginHumanTurn(c) {
     S.humanTurn = true; S.viewColor = c; S.sel = null; S.cursor = null; S.locked = false; S.hintMsg = '';
@@ -380,18 +381,56 @@
     const gs = ghostState();
     if (!gs.res.ok) { snd.no(); say(REASONS[gs.res.reason]); return; }
     const c = S.game.turn, seat = seatFor(c), p = S.sel.p, size = PIECES[p].size;
+    const snap = E.cloneGame(S.game), cells = gs.cells;
+    clearUndo();
     if (S.online) {
       S.justPlaced = true;
-      const res = S.online.proposeMove(c, p, gs.cells);
+      const res = S.online.proposeMove(c, p, cells);
       if (!res.ok) { S.justPlaced = false; snd.no(); say("That move couldn't be sent. Please wait a moment and try again."); onlineTick(); return; }
+      if (S.online.game.placed[c] >= UNDO_AFTER && !S.over) armUndo({ c, p, cells, n: S.online.moveN });
     } else {
-      commitMove(c, p, gs.cells);
+      commitMove(c, p, cells);
+      if (S.game.placed[c] >= UNDO_AFTER && !S.over) armUndo({ c, p, cells, snap });
     }
     snd.place();
     const cheers = size >= 5 ? ['Big one!', 'Nice, a five-square piece.', 'Solid move.'] : size >= 3 ? ['Nicely done.', 'Neat fit.', 'Good spot.'] : ['Tidy.', 'Sneaky little piece.', 'Good use of space.'];
     say(cheers[Math.floor(Math.random() * cheers.length)] + (S.online ? ` You placed the ${PIECES[p].name}.` : ` ${seat.name} placed the ${PIECES[p].name}.`));
     if (!S.online) runTurns();
   }
+  // ---------- Undo: for 5 seconds after you place a piece, once you've used more than half your pieces ----------
+  const UNDO_AFTER = 11, UNDO_MS = 5000;
+  function armUndo(u) {
+    S.undo = Object.assign(u, { until: Date.now() + UNDO_MS });
+    clearInterval(S.undoTimer); S.undoTimer = setInterval(renderUndo, 250);
+    renderUndo();
+  }
+  function clearUndo() { S.undo = null; clearInterval(S.undoTimer); S.undoTimer = null; renderUndo(); }
+  function renderUndo() {
+    const b = $('#btn-undo'), u = S.undo;
+    const live = u && (u.pending || Date.now() < u.until) && !S.over;
+    if (u && !live) { S.undo = null; clearInterval(S.undoTimer); S.undoTimer = null; }
+    b.disabled = !live;
+    const secs = live && !u.pending ? Math.max(1, Math.ceil((u.until - Date.now()) / 1000)) : 0;
+    b.querySelector('.lbl').textContent = !live ? 'Undo' : u.pending ? 'Undoing…' : `Undo (${secs})`;
+  }
+  function reselect(p, cells, c) { // the undone piece goes back on the board where it was, ready to move or place again
+    const tf = E.findTransform(p, cells), o = E.transform(p, tf.rot, tf.flip);
+    const ox = Math.min(...cells.map((q) => q[0])), oy = Math.min(...cells.map((q) => q[1]));
+    S.viewColor = c; S.sel = { p, rot: tf.rot, flip: tf.flip }; S.cursor = cursorFor(o, ox, oy); S.locked = true; S.hintMsg = '';
+  }
+  function undo() {
+    const u = S.undo;
+    if (!u || u.pending || Date.now() >= u.until || S.over) { renderUndo(); return; }
+    if (S.online) { u.pending = true; renderUndo(); S.online.requestUndo(u.n); return; }
+    // on this device: go back to just before the move (any computer moves since are taken back too)
+    clearUndo();
+    S.token++; S.running = false;
+    S.game = E.cloneGame(u.snap); S.banner = ''; S.humanTurn = true; S.anim = null;
+    reselect(u.p, u.cells, u.c);
+    renderAll(); snd.pick();
+    say('Undone. Your piece is back on the board. Move it, or press Place piece.');
+  }
+  $('#btn-undo').onclick = undo;
   function hint() {
     if (!myTurn()) return;
     const g = S.game, c = g.turn;
@@ -455,7 +494,8 @@
     if (!myTurn()) return;
     if (!S.sel) { snd.no(); say('Choose one of your pieces first.'); return; }
     const gs = ghostState();
-    if (S.locked && gs && gs.res.ok && gs.cells.some(([x, y]) => x === c.x && y === c.y)) { placeNow(); return; }
+    // Tapping the piece itself never places it (too easy to do by accident): only the Place button does.
+    if (S.locked && gs && gs.cells.some(([x, y]) => x === c.x && y === c.y)) { say(gs.res.ok ? 'Press Place piece to put it down.' : REASONS[gs.res.reason], false); return; }
     const spot = snapNear(c, 2);
     if (spot) {
       S.sel.rot = spot.rot; S.sel.flip = spot.flip; S.cursor = spot.cursor; S.locked = true;
@@ -718,7 +758,7 @@
     }
     if (!S.cursor) return { main: head, sub: 'Now tap the board to preview where it goes.', tone: '', c };
     const gs = ghostState();
-    if (gs.res.ok) return { main: '✓ It fits here', sub: S.hintMsg || (isCompact() ? 'Tap the piece again, or press “Place piece” below your pieces.' : 'Press “Place piece”, or tap the piece again.'), tone: 'ok', c };
+    if (gs.res.ok) return { main: '✓ It fits here', sub: S.hintMsg || (isCompact() ? 'Press “Place piece” (just below your pieces).' : 'Press “Place piece” to put it down.'), tone: 'ok', c };
     return { main: '✗ Not here', sub: S.sel.noFit ? 'This piece does not fit anywhere right now. Try a different piece.'
       : gs.res.reason === 'start' ? `Your first piece must cover your corner square (${CORNER_NAME[c]}).` : REASONS[gs.res.reason], tone: 'bad', c };
   }
@@ -841,7 +881,7 @@
   }
   function finish() {
     if (S.over) return;
-    S.over = true; S.humanTurn = false;
+    S.over = true; S.humanTurn = false; clearUndo();
     const rows = results();
     const secs = Math.round((Date.now() - S.start) / 1000);
     const winners = rows.filter((r) => r.win);
@@ -855,13 +895,62 @@
     if (S.online) $('#over-title').textContent = winners.length > 1 ? (meWon ? "It's a tie, and you share the win!" : 'It is a tie!') : (meWon ? 'You win!' : `${winners[0].name} wins!`);
     else $('#over-title').textContent = winners.length > 1 ? 'It is a tie!' : (winners[0].type === 'human' && winners[0].name === 'You' ? 'You win!' : `${winners[0].name} wins!`);
     $('#over-again').textContent = S.online && !S.online.amHost() ? 'Back to the room' : 'Play again';
-    $('#over-sub').textContent = `${Math.floor(secs / 60)} min ${secs % 60} sec. Highest score wins.`;
-    $('#over-body').innerHTML = `<table><thead><tr><th scope="col">Player</th><th scope="col">Squares left</th><th scope="col">Score</th></tr></thead><tbody>` +
-      rows.map((r) => `<tr class="${r.win ? 'win' : ''}"><td>${esc(r.name)}${r.win ? '<span class="tag">winner</span>' : ''}<br><small>${r.cols.map((c) => COLORS[c].name).join(' + ')}${r.bonus.length ? ' · all pieces placed ' + r.bonus.join(', ') : ''}</small></td><td>${r.left}</td><td>${r.pts}</td></tr>`).join('') +
-      `</tbody></table>${config.mode === 3 ? '<p class="hint-line">The shared colour, Green, is not counted.</p>' : ''}`;
+    $('#overbar-again').textContent = $('#over-again').textContent;
+    renderResults(rows, secs, humanWon);
     say($('#over-title').textContent + ' ' + winners.map((w) => `${w.name} scored ${w.pts}`).join(', ') + '.');
     if (humanWon) { snd.win(); confetti(); } else snd.pass();
-    setTimeout(() => { if (S.over) openDlg('dlg-over'); }, 700);
+    // the finished board stays on screen, with a bar to reopen the results
+    $('#screen-game').dataset.over = '1'; $('#overbar').hidden = false;
+    setTimeout(() => { if (S.over) { openDlg('dlg-over'); countUp(); } }, 700);
+  }
+  function resetOver() { $('#screen-game').dataset.over = '0'; $('#overbar').hidden = true; const d = $('#dlg-over'); if (d.open) d.close(); }
+
+  // ---------- results: podium, progress bars, badges ----------
+  function renderResults(rows, secs, celebrate) {
+    const g = S.game, humans = config.seats.filter((x) => x.type === 'human').length;
+    const rankOf = (r) => 1 + rows.filter((o) => o.pts > r.pts).length;
+    const mine = (r) => (S.online ? r.owner === S.online.myKey : r.type === 'human' && humans === 1);
+    const placedSq = (r) => r.cols.length * 89 - r.left;
+    const most = Math.max(...rows.map(placedSq));
+    const mostCount = rows.filter((r) => placedSq(r) === most).length;
+    const TITLES = { 1: 'Corner Champion', 2: 'So close!', 3: 'Solid game', 4: 'Ready for a rematch' };
+    const MEDAL = { 1: '🥇', 2: '🥈', 3: '🥉', 4: '🌱' };
+    const tie = rows.length > 1 && rows[0].pts === rows[1].pts, diff = rows.length > 1 ? rows[0].pts - rows[1].pts : 0;
+    const margin = tie ? 'Neck and neck!' : diff <= 3 ? `Won by ${diff} — what a nail-biter!` : diff >= 15 ? `Won by ${diff} points. A landslide!` : `Won by ${diff} points.`;
+    $('#over-burst').textContent = celebrate ? '🎉' : '🏁';
+    $('#over-sub').textContent = `${margin} · ${Math.floor(secs / 60)} min ${secs % 60} sec`;
+    // podium: 2nd · 1st · 3rd
+    const top = rows.slice(0, 3), order = top.length >= 2 ? [top[1], top[0], top[2]].filter(Boolean) : top;
+    $('#over-podium').innerHTML = order.map((r) => { const k = rankOf(r); return `<div class="pod" data-rank="${Math.min(k, 3)}" style="--c:${FILL[r.cols[0]]}">
+      <div class="pod-medal">${MEDAL[k] || ''}</div><div class="pod-name">${esc(r.name)}</div><div class="pod-block">${r.pts}</div></div>`; }).join('');
+    $('#over-body').innerHTML = '<div class="res">' + rows.map((r) => {
+      const k = rankOf(r), placed = placedSq(r), of = r.cols.length * 89;
+      const pieces = r.cols.reduce((t, c) => t + g.placed[c], 0), piecesOf = r.cols.length * 21;
+      const badges = [];
+      r.cols.forEach((c) => {
+        if (E.remaining(g, c) === 0) badges.push('✨ Placed every piece' + (r.cols.length > 1 ? ` (${COLORS[c].name})` : '') + ' +15');
+        if (E.remaining(g, c) === 0 && g.lastPiece[c] === 0) badges.push('🎯 Single square last +5');
+      });
+      if (placed === most && mostCount === 1 && rows.length > 1) badges.push('🧱 Most squares placed');
+      return `<div class="res-row${r.win ? ' win' : ''}" style="--c:${FILL[r.cols[0]]}">
+        <div class="res-rank" aria-label="Place ${k}">${MEDAL[k] || k}</div>
+        <div><div class="res-name">${esc(r.name)}${mine(r) && r.name !== 'You' ? '<span class="res-you">you</span>' : ''}</div>
+          <div class="res-title">${r.win && tie ? 'Co-champion' : TITLES[k] || ''}${r.cols.length > 1 ? ' · ' + r.cols.map((c) => COLORS[c].name).join(' + ') : ''}</div>
+          <div class="res-bar" role="img" aria-label="${placed} of ${of} squares placed"><span style="--w:${Math.round(placed / of * 100)}%"></span></div>
+          <div class="res-meta">${placed}/${of} squares · ${pieces}/${piecesOf} pieces</div>
+          ${badges.length ? `<div class="res-badges">${badges.map((b) => `<span>${b}</span>`).join('')}</div>` : ''}</div>
+        <div class="res-score"><span class="res-num" data-to="${r.pts}">${r.pts}</span><small>points</small></div></div>`;
+    }).join('') + '</div>' + (config.mode === 3 ? '<p class="hint-line">The shared colour, Green, is not counted.</p>' : '');
+  }
+  function countUp() { // scores tick up from zero
+    if (reducedMotion()) return;
+    const els = $$('#over-body .res-num'), t0 = performance.now(), D = 1100;
+    els.forEach((e) => { e.textContent = '0'; });
+    (function tick(now) {
+      const k = Math.min(1, (now - t0) / D), ease = 1 - Math.pow(1 - k, 3);
+      els.forEach((e) => { e.textContent = String(Math.round(+e.dataset.to * ease)); });
+      if (k < 1) requestAnimationFrame(tick);
+    })(t0);
   }
   $('#over-again').onclick = () => {
     $('#dlg-over').close();
@@ -871,6 +960,13 @@
     }
     else startGame();
   };
+  $('#over-board').onclick = () => { // look at the finished board
+    $('#dlg-over').close();
+    if (isCompact()) window.scrollTo(0, playersTop());
+    say('Here is the final board. Press See the results to go back.', false);
+  };
+  $('#overbar-results').onclick = () => openDlg('dlg-over');
+  $('#overbar-again').onclick = () => $('#over-again').onclick();
   $('#over-menu').onclick = () => {
     $('#dlg-over').close();
     if (S.online) { leaveOnline(); show('menu'); } else { S.token++; S.game = null; show('menu'); }
@@ -1025,6 +1121,20 @@
       if ($('#screen-game').hidden || !S.game) beginOnlineGame(room, true); else refreshOnlineGame(room);
     });
     room.on('move', onOnlineMove);
+    room.on('undone', (u) => {
+      if (u.by === room.myKey) {
+        clearUndo();
+        if (room.game.turn === u.move.color && myTurn()) { reselect(u.move.p, u.move.cells, u.move.color); renderAll(); }
+        snd.pick(); say('Undone. Your piece is back on the board. Move it, or press Place piece.');
+      } else {
+        const who = (room.lobby.seats.find((x) => x.owner === u.by) || {}).name || 'A player';
+        say(`${who} took back their last move.`);
+      }
+    });
+    room.on('undo-no', (reason) => {
+      clearUndo();
+      snd.no(); say(reason === 'someone-moved' ? 'Too late to undo: another player has already moved.' : 'Too late to undo that move.');
+    });
     room.on('resume', () => onlineTick());
     room.on('rematch', () => {
       const d = $('#dlg-over'); if (d.open) d.close();
@@ -1129,6 +1239,7 @@
   $('#menu-online').onclick = () => openOnlineEntry();
 
   function leaveOnline() {
+    resetOver(); clearUndo();
     if (S.online) { try { S.online.leave(); } catch (e) {} S.online = null; }
     ss.set('activeRoom', null);
     if (S.onlineBotTimer) { clearTimeout(S.onlineBotTimer); S.onlineBotTimer = null; }
@@ -1139,6 +1250,7 @@
     if (saved) { config.mode = saved.mode; config.seats = saved.seats; }
   }
   function beginOnlineGame(room, quiet) {
+    resetOver(); clearUndo();
     if (S.onlineBotTimer) { clearTimeout(S.onlineBotTimer); S.onlineBotTimer = null; }
     const d = $('#dlg-over'); if (d.open) d.close();
     S.token++; S.game = room.game; S.sel = null; S.cursor = null; S.locked = false; S.hintMsg = ''; S.banner = '';
@@ -1153,9 +1265,7 @@
   function refreshOnlineGame(room) {
     if (S.onlineBotTimer) { clearTimeout(S.onlineBotTimer); S.onlineBotTimer = null; }
     S.game = room.game; S.sel = null; S.cursor = null; S.locked = false; S.humanTurn = false; S.hintMsg = '';
-    if (S.over && !room.game.out.every(Boolean)) { // the room corrected us: the game isn't actually over
-      S.over = false; const d = $('#dlg-over'); if (d.open) d.close();
-    }
+    if (S.over && !room.game.out.every(Boolean)) { S.over = false; resetOver(); } // the room corrected us: the game isn't actually over
     renderOnlineBanner(); renderAll();
     onlineTick();
   }
@@ -1174,6 +1284,7 @@
   function onOnlineMove(m) {
     if (S.onlineBotTimer) { clearTimeout(S.onlineBotTimer); S.onlineBotTimer = null; }
     const mine = S.justPlaced; S.justPlaced = false;
+    if (!mine && !m.bot && S.undo && !S.undo.pending) clearUndo(); // another person has moved: too late to undo
     S.game = S.online.game;
     S.sel = null; S.cursor = null; S.locked = false; S.humanTurn = false; S.hintMsg = '';
     if (!m.pass && !reducedMotion()) { S.anim = { cells: m.cells, t0: performance.now() }; animate(); }
@@ -1293,6 +1404,24 @@
       if (!(await joinRoom(active.code, active.name))) ss.set('activeRoom', null);
     }
   })();
+
+  // ---------- installable app (PWA) ----------
+  const standalone = () => (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  }
+  let installPrompt = null;
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; $('#menu-install').hidden = standalone(); });
+  window.addEventListener('appinstalled', () => { installPrompt = null; $('#menu-install').hidden = true; });
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (isIOS && !standalone()) $('#menu-install').hidden = false; // iPhone/iPad can't prompt: show the steps instead
+  $('#menu-install').onclick = async () => {
+    if (installPrompt) { installPrompt.prompt(); try { await installPrompt.userChoice; } catch (e) {} installPrompt = null; return; }
+    $('#install-steps').innerHTML = isIOS
+      ? '<li>Tap the <b>Share</b> button (the square with an arrow ⬆︎) in Safari.</li><li>Scroll down and tap <b>Add to Home Screen</b>.</li><li>Tap <b>Add</b>. Cornerstone is now on your home screen.</li>'
+      : '<li>Open your browser\'s menu (<b>⋮</b> or <b>⋯</b>).</li><li>Tap <b>Install app</b> or <b>Add to Home screen</b>.</li><li>Confirm. Cornerstone is now on your home screen.</li>';
+    openDlg('dlg-install');
+  };
 
   // test hook
   window.__cornerstone = { S, config, startGame, leaveOnline };

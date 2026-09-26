@@ -6,6 +6,12 @@
   <title>Cornerstone: a game of corners</title>
   <meta name="description" content="Cornerstone is a free, easy-to-read board game for 1 to 4 players. Fit your pieces on the board, touching only at the corners.">
   <meta name="theme-color" content="#123a2c">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Cornerstone">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
@@ -29,6 +35,7 @@
           <button class="btn big" id="menu-help">How to play</button>
           <button class="btn big" id="menu-stats">My scores</button>
           <button class="btn big" id="menu-settings">Settings: text size, colours, sound</button>
+          <button class="btn big" id="menu-install" hidden><span aria-hidden="true">📲</span> Add to my home screen</button>
         </div>
       </div>
     </section>
@@ -152,8 +159,14 @@
           </div>
 
           <div class="actions">
-            <button class="btn" id="btn-hint" type="button"><span class="ico" aria-hidden="true">💡</span> <span class="lbl">Suggest a move</span></button>
+            <button class="btn" id="btn-undo" type="button" disabled aria-live="polite"><span class="ico" aria-hidden="true">↶</span> <span class="lbl">Undo</span></button>
             <button class="btn primary place" id="btn-place" type="button"><span class="ico" aria-hidden="true">✓</span> <span class="lbl">Place piece</span></button>
+            <button class="btn" id="btn-hint" type="button"><span class="ico" aria-hidden="true">💡</span> <span class="lbl">Suggest a move</span></button>
+          </div>
+
+          <div class="overbar" id="overbar" hidden>
+            <button class="btn primary" id="overbar-results" type="button"><span aria-hidden="true">🏆</span> See the results</button>
+            <button class="btn" id="overbar-again" type="button">Play again</button>
           </div>
 
           <div class="tray">
@@ -191,6 +204,15 @@
       <h3>Keyboard</h3>
       <p>Click the board, then use the <b>arrow keys</b> to move a piece, <b>R</b> to rotate, <b>F</b> to flip, <b>[</b> and <b>]</b> to change piece, and <b>Enter</b> to place it.</p>
       <div class="row end"><button class="btn primary" data-close>Close</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-install" aria-labelledby="install-title">
+    <div class="dlg">
+      <h2 id="install-title">Add Cornerstone to your home screen</h2>
+      <p class="lead-sm">Then it opens like an app, full screen, with its own icon.</p>
+      <ol class="rules" id="install-steps"></ol>
+      <div class="row end"><button class="btn primary" data-close>Got it</button></div>
     </div>
   </dialog>
 
@@ -248,13 +270,16 @@
   </dialog>
 
   <dialog id="dlg-over" aria-labelledby="over-title">
-    <div class="dlg">
+    <div class="dlg over">
+      <p class="over-burst" id="over-burst" aria-hidden="true">🎉</p>
       <h2 id="over-title"></h2>
       <p id="over-sub" class="lead-sm"></p>
+      <div id="over-podium" class="podium" aria-hidden="true"></div>
       <div id="over-body"></div>
-      <div class="row end">
-        <button class="btn" id="over-menu">Main menu</button>
+      <div class="over-actions">
         <button class="btn primary" id="over-again">Play again</button>
+        <button class="btn" id="over-board"><span aria-hidden="true">🔍</span> See the board</button>
+        <button class="btn" id="over-menu">Main menu</button>
       </div>
     </div>
   </dialog>

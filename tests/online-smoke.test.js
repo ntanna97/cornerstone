@@ -43,7 +43,7 @@ function autoplay(devs) {
   (async function loop() {
     while (on) {
       for (const d of devs) {
-        if (d.closed) continue;
+        if (d.closed || d.paused) continue;
         trace(d);
         const S = d.api.S;
         if (S.online && S.humanTurn && !S.over && !d.$('#btn-hint').disabled) {
@@ -168,6 +168,38 @@ async function fourDevicesJoinViaInvite(net, names) {
   console.log('host drop: computer seat kept playing under a new host, Neil rejoined, all devices agree');
   checkNoErrors(r2.devs);
   r2.devs.forEach((d) => d.api.leaveOnline());
+
+  // ---------- Undo online: Alex takes back a move; the computer moves after it are taken back too ----------
+  const net5 = makeNet({ seed: 21 });
+  const r5 = await fourDevicesJoinViaInvite(net5, ['Neil', 'Alex']);
+  const [n5, a5] = r5.devs;
+  await until(() => a5.api.S.online && a5.api.S.online.mySeat() === 1, 3000, 'Alex seated');
+  await until(() => !n5.$('#lobby-seats [data-setbot="2"]') === false, 2000, 'seat buttons');
+  n5.$('[data-setbot="2"]').click(); await sleep(30); n5.$('[data-setbot="3"]').click();
+  await until(() => !n5.$('#lobby-start').disabled, 2000, 'start enabled');
+  n5.$('#lobby-start').click();
+  await until(() => r5.devs.every((d) => !d.$('#screen-game').hidden), 2000, 'game on');
+  let undoDone = false;
+  const stop5 = autoplay(r5.devs);
+  // let the game run until Alex has placed 10 pieces, then take over Alex's next turn by hand
+  a5.paused = true;
+  await until(() => { const S = a5.api.S; if (S.humanTurn && S.game.placed[1] < 10) { a5.$('#btn-hint').click(); a5.$('#btn-place').click(); } return S.humanTurn && S.game.placed[1] >= 10; }, 40000, 'Alex reaches 10 pieces');
+  n5.paused = true; // Neil waits, so only computer players move after Alex
+  const A = a5.api.S, before = A.game.placed[1];
+  a5.$('#btn-hint').click(); a5.$('#btn-place').click();
+  if (a5.$('#btn-undo').disabled) throw new Error('Alex should be offered Undo right after placing his 11th piece');
+  await until(() => A.online.game.turn === 0 || A.online.game.out[0], 3000, 'computer players moved');
+  a5.$('#btn-undo').click();
+  await until(() => A.online.game.placed[1] === before && A.online.game.turn === 1 && A.humanTurn && A.sel, 3000, "Alex's piece is back and it's his turn");
+  const NS = n5.api.S;
+  await until(() => NS.online.moveN === A.online.moveN && require('../net.js').fingerprint(NS.game, NS.online.moveN) === require('../net.js').fingerprint(A.game, A.online.moveN), 3000, "Neil's board matches");
+  undoDone = true;
+  console.log('undo online: Alex took back his move (and the computer moves after it) on both devices');
+  n5.paused = false; a5.paused = false;
+  await until(() => r5.devs.every((d) => d.api.S.over), 60000, 'game over after undo');
+  stop5();
+  if (JSON.stringify(resultRows(r5.devs[0])) !== JSON.stringify(resultRows(r5.devs[1]))) throw new Error('devices disagree after undo');
+  checkNoErrors(r5.devs); r5.devs.forEach((d) => d.api.leaveOnline());
 
   // ---------- Test 3: a wrong code says so instead of spinning forever ----------
   const net3 = makeNet({ seed: 3 });

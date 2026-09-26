@@ -20,6 +20,7 @@ function device(net, code, key, name, extra) {
     const g = room.game; if (g.out.every(Boolean)) return;
     const c = g.turn;
     if (!room.actingColors().includes(c)) return;
+    if (room.botsOnly && room.seatForColor(c).type === 'human') return; // test controls this person's moves by hand
     if (extra && extra.beforeAct) extra.beforeAct(room, g, c);
     if (!E.hasMove(g, c)) room.proposePass(c);
     else { const mv = E.botChoose(g, c, 'easy'); room.proposeMove(c, mv.p, mv.cells); }
@@ -165,6 +166,78 @@ test("a move that overtakes the host's 'game started' message is kept, not lost 
   await finishAll(all);
   assert.strictEqual(resyncs, 0, 'nobody should need catching up: ' + asked.join(', '));
   closeAll(all);
+});
+
+async function undoSetup(seed, timing) {
+  const net = makeNet({ seed });
+  const code = 'UNDO' + seed;
+  const t = Object.assign({}, TIMING, timing || {});
+  const host = new Net.Room(net.join(code, 'k-host'), { code, name: 'Neil', host: true, mode: 4, engine: E, timing: t });
+  const a = new Net.Room(net.join(code, 'k-a'), { code, name: 'Alex', engine: E, timing: t });
+  await until(() => a.mySeat() === 1, 2000, 'Alex seated');
+  host.setSeat(2, { type: 'bot' }); host.setSeat(3, { type: 'bot' });
+  await until(() => a.lobby.seats[3].type === 'bot', 2000, 'bots set');
+  host.startGame();
+  await until(() => a.started, 2000, 'start');
+  const play = (r, c) => { const mv = E.botChoose(r.game, c, 'easy'); return r.proposeMove(c, mv.p, mv.cells); };
+  const bots = () => { while (host.started && host.game.turn >= 2 && !host.game.out.every(Boolean)) { const c = host.game.turn; if (!E.hasMove(host.game, c)) host.proposePass(c); else play(host, c); } };
+  return { net, host, a, play, bots };
+}
+
+test('Undo: takes back my move and the computer moves after it, on every device', async () => {
+  const { host, a, play, bots } = await undoSetup(201);
+  play(host, 0); await until(() => a.moveN === 1, 1000, 'move 1');
+  const beforeMine = fp(a);
+  play(a, 1); await until(() => host.game.turn !== 1, 1000, "Alex's move reaches the host"); bots();
+  await until(() => a.moveN === 4 && host.moveN === 4, 1000, 'my move + 2 computer moves');
+  const last = a.myLastMove();
+  assert.ok(last && last.n === 2, 'Alex can see his last move is undoable');
+  let undoneOnA = null; a.on('undone', (u) => { undoneOnA = u; });
+  a.requestUndo(last.n);
+  await until(() => a.moveN === 1 && host.moveN === 1 && a.ep === 1 && host.ep === 1, 1500, 'rolled back everywhere');
+  assert.strictEqual(fp(a), beforeMine, "Alex's board is back to just before his move");
+  assert.strictEqual(fp(host), beforeMine, "the host's board too");
+  assert.strictEqual(a.game.turn, 1, "it's Alex's turn again");
+  assert.ok(undoneOnA && undoneOnA.by === 'k-a' && undoneOnA.move.p === last.p, 'Alex is told which piece came back');
+  // play on normally afterwards
+  play(a, 1); await until(() => host.game.turn !== 1, 1000, "Alex's move reaches the host"); bots();
+  await until(() => host.moveN === 4 && a.moveN === 4 && fp(a) === fp(host), 1500, 'game carries on in sync after the undo');
+  host.leave(); a.leave();
+});
+
+test('Undo is refused once another person has moved; old computer moves after an undo are ignored', async () => {
+  const { net, host, a, play, bots } = await undoSetup(202);
+  play(host, 0); await until(() => a.moveN === 1, 1000, 'move 1');
+  play(a, 1); await until(() => host.game.turn !== 1, 1000, "Alex's move reaches the host"); bots(); await until(() => a.moveN === 4, 1000, 'computer moves');
+  play(host, 0); await until(() => a.moveN === 5, 1000, 'Neil moved after Alex');
+  assert.strictEqual(a.myLastMove(), null, "Alex's move is no longer undoable on his device");
+  let refused = null; a.on('undo-no', (r) => { refused = r; });
+  a.requestUndo(2);
+  await until(() => refused, 1000, 'host refuses');
+  assert.strictEqual(refused, 'someone-moved');
+  assert.strictEqual(a.moveN, 5, 'nothing was rolled back');
+  // new round: Alex moves, computers move, Alex undoes, then a stale computer move from before the undo arrives
+  await until(() => a.game.turn === 1, 1000, "Alex's turn");
+  play(a, 1); await until(() => host.game.turn !== 1, 1000, "Alex's move reaches the host"); bots(); await until(() => a.moveN === 8 && host.moveN === 8, 1000, 'round 2');
+  a.requestUndo(6);
+  await until(() => a.ep === 1 && a.moveN === 5, 1500, 'undone');
+  const raw = net.join(host.code, 'k-ghost');
+  raw.send('move', { gid: host.lobby.gameId, ep: 0, n: 6, color: 1, p: 0, cells: [[0, 0]], h: 'x' });
+  await sleep(80);
+  assert.strictEqual(a.moveN, 5, 'a move from before the undo is ignored');
+  host.leave(); a.leave(); raw.leave();
+});
+
+test('Undo is refused after the time window', async () => {
+  const { host, a, play, bots } = await undoSetup(203, { undoMs: 100 });
+  play(host, 0); await until(() => a.moveN === 1, 1000, 'move 1');
+  play(a, 1); await until(() => host.game.turn !== 1, 1000, "Alex's move reaches the host"); bots(); await until(() => a.moveN === 4, 1000, 'computer moves');
+  await sleep(1800); // past 100ms + 1.5s allowance for network delay
+  let refused = null; a.on('undo-no', (r) => { refused = r; });
+  a.requestUndo(2);
+  await until(() => refused, 1000, 'refused');
+  assert.strictEqual(refused, 'too-late');
+  host.leave(); a.leave();
 });
 
 test('host is decided without clocks: a joiner never takes charge before it has the room', async () => {

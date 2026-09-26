@@ -21,7 +21,8 @@ jobs:
       - name: Keep only the site files
         run: |
           mkdir _site
-          cp index.html styles.css app.js engine.js net.js supabase-transport.js _site/
+          cp index.html styles.css app.js engine.js net.js supabase-transport.js manifest.webmanifest sw.js _site/
+          cp -r icons _site/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

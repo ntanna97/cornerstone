@@ -35,7 +35,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const S = api.S;
   if (!S.humanTurn) throw new Error('should be human turn (blue first)');
   if (w.document.querySelectorAll('#tray .piece').length !== 21) throw new Error('21 pieces expected');
-  if ($('#btn-undo') || $('#hand-preview')) throw new Error('undo button / piece showcase should have been removed');
+  if ($('#hand-preview')) throw new Error('piece showcase should have been removed');
+  if (!$('#btn-undo').disabled) throw new Error('Undo starts unavailable');
   // selecting a piece from the tray should immediately drop a ghost cursor on the board, no board tap needed
   [...w.document.querySelectorAll('#tray .piece')][0].click();
   if (!S.sel) throw new Error('selecting a tray piece should set S.sel');
@@ -55,19 +56,43 @@ if ($('#hand-toggle')) throw new Error('the Hide button should be gone');
   $('#board').dispatchEvent(new w.MouseEvent('click', { clientX: 0, clientY: 0 }));
   if (!/first piece/.test($('#status-sub').textContent)) throw new Error('expected first-piece reason, got: ' + $('#status-sub').textContent);
   // play the whole game through the UI using the hint button
-  let turns = 0;
+  let turns = 0, undoTested = false;
   while (!S.over && turns < 60) {
     for (let i = 0; i < 800 && !S.humanTurn && !S.over; i++) await sleep(10);
     if (S.over) break;
     $('#btn-hint').click();
     if ($('#btn-place').disabled) throw new Error('place disabled after hint; turn '+turns+' humanTurn '+S.humanTurn+' sel '+JSON.stringify(S.sel)+' cur '+JSON.stringify(S.cursor)+' gturn '+S.game.turn);
+    const placedBefore = S.game.placed[0];
+    if (placedBefore < 10 && !$('#btn-undo').disabled) throw new Error('Undo should not be available before half the pieces are used');
     $('#btn-place').click();
     turns++;
+    // once more than half the pieces are used, Undo is offered for 5 seconds after placing: test it once
+    if (!undoTested && S.game.placed[0] >= 11) {
+      if ($('#btn-undo').disabled) throw new Error('Undo should be available right after placing (placed ' + S.game.placed[0] + ')');
+      if (!/Undo \(\d\)/.test($('#btn-undo').textContent)) throw new Error('Undo should show a countdown: ' + $('#btn-undo').textContent);
+      await sleep(400); // let the computer players move
+      $('#btn-undo').click();
+      if (S.game.placed[0] !== placedBefore) throw new Error('Undo should take the piece back (placed ' + S.game.placed[0] + ', expected ' + placedBefore + ')');
+      if (S.game.turn !== 0 || !S.humanTurn || !S.sel) throw new Error("after Undo it's my turn again, with the piece back on the board");
+      if (!$('#btn-undo').disabled) throw new Error('Undo is used up');
+      undoTested = true;
+      $('#btn-place').click(); // place it again
+    }
   }
+  if (!undoTested) throw new Error('the game never reached the point where Undo is offered');
+  console.log('undo: offered after half the pieces, counts down, takes back the move and the computer moves after it');
   for (let i = 0; i < 1500 && !S.over; i++) await sleep(20);
   if (!S.over) throw new Error('game did not finish, turns ' + turns);
   await sleep(900);
   if (!$('#dlg-over').hasAttribute('open')) throw new Error('results dialog not open');
+  // look at the finished board, then bring the results back
+  if (!$('#over-podium').children.length) throw new Error('the results should have a podium');
+  $('#over-board').click();
+  if ($('#dlg-over').hasAttribute('open')) throw new Error('"See the board" should close the results');
+  if ($('#screen-game').hidden || $('#overbar').hidden) throw new Error('the final board should stay on screen with a results bar');
+  $('#overbar-results').click();
+  if (!$('#dlg-over').hasAttribute('open')) throw new Error('"See the results" should reopen them');
+  console.log('game over: the final board can be viewed, and the results reopened');
   console.log('title:', $('#over-title').textContent);
   console.log($('#over-body').textContent.replace(/\s+/g,' ').slice(0,300));
   // undo test: new 3-player game

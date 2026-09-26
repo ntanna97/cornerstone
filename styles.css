@@ -186,10 +186,51 @@ button{touch-action:manipulation;-webkit-user-select:none;user-select:none;-webk
 .tray-head .tray-title{margin:0}
 .short{display:none}
 
-/* ---------- the Suggest / Place row (desktop: under the controls) ---------- */
-.actions{display:grid;grid-template-columns:1fr 1.4fr;gap:.6rem}
+/* ---------- Undo · Place, then Suggest underneath ---------- */
+.actions{display:grid;grid-template-columns:1fr 1.6fr;grid-template-areas:"undo place" "hint hint";gap:.6rem}
+#btn-undo{grid-area:undo} #btn-place{grid-area:place} #btn-hint{grid-area:hint}
 .actions .btn{min-height:3.4rem;font-size:1.05rem}
-#btn-hint .ico,#btn-place .ico{margin-right:.2rem}
+#btn-hint .ico,#btn-place .ico,#btn-undo .ico{margin-right:.2rem}
+#btn-undo:not([disabled]){background:var(--gold);animation:undoPulse 1s ease-in-out infinite alternate}
+@keyframes undoPulse{from{box-shadow:0 4px 0 var(--ink)}to{box-shadow:0 4px 0 var(--ink),0 0 0 5px rgba(255,210,63,.45)}}
+
+/* ---------- after the game: look at the board ---------- */
+.overbar{display:grid;grid-template-columns:1.4fr 1fr;gap:.6rem;align-content:center}
+.overbar .btn{min-height:3.4rem;font-size:1.05rem}
+.screen.game[data-over="1"] .hand,.screen.game[data-over="1"] .tray,.screen.game[data-over="1"] .actions{display:none}
+
+/* ---------- results ---------- */
+.dlg.over{text-align:center;background:linear-gradient(180deg,#fffaf0,#f6f8fa 45%)}
+.over-burst{font-size:3rem;line-height:1;margin:.2rem 0 0}
+.dlg.over h2{font-size:1.9rem;margin:.2rem 0 .1rem}
+.dlg.over .lead-sm{margin:0 0 .8rem}
+.podium{display:flex;justify-content:center;align-items:flex-end;gap:.5rem;height:9.5rem;margin:.4rem 0 1rem}
+.pod{flex:0 1 6.5rem;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}
+.pod-medal{font-size:2rem;line-height:1}
+.pod-name{font-weight:700;font-size:.9rem;margin:.15rem 0 .25rem;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pod-block{width:100%;border:var(--bw) solid var(--ink);border-bottom:0;border-radius:12px 12px 0 0;background:var(--c);color:#fff;font-weight:700;font-size:1.3rem;display:flex;align-items:flex-start;justify-content:center;padding-top:.3rem;transform-origin:bottom;animation:rise .7s cubic-bezier(.2,.9,.3,1.3) both}
+.pod[data-rank="1"] .pod-block{height:5.6rem;animation-delay:.5s}
+.pod[data-rank="2"] .pod-block{height:4rem;animation-delay:.25s}
+.pod[data-rank="3"] .pod-block{height:2.8rem}
+@keyframes rise{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+.res{display:grid;gap:.55rem;text-align:left}
+.res-row{display:grid;grid-template-columns:2.4rem minmax(0,1fr) auto;gap:.6rem;align-items:center;background:#fff;border:var(--bw) solid var(--ink);border-left:.7rem solid var(--c);border-radius:14px;padding:.55rem .7rem}
+.res-row.win{background:#fff7d6;box-shadow:0 0 0 3px var(--gold)}
+.res-rank{font-size:1.8rem;text-align:center}
+.res-name{font-weight:700;font-size:1.05rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.res-you{display:inline-block;background:var(--ink);color:#fff;border-radius:7px;padding:0 .35rem;font-size:.75rem;margin-left:.3rem;vertical-align:middle}
+.res-title{font-size:.85rem;color:var(--muted)}
+.res-bar{height:.7rem;background:var(--paper2);border-radius:99px;overflow:hidden;margin:.3rem 0 .2rem;border:1px solid #c5ccd4}
+.res-bar span{display:block;height:100%;background:var(--c);border-radius:99px;width:var(--w);animation:fill 1.1s ease-out both;animation-delay:.6s}
+@keyframes fill{from{width:0}to{width:var(--w)}}
+.res-meta{font-size:.8rem;color:var(--muted)}
+.res-badges{display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.3rem}
+.res-badges span{background:var(--paper2);border:1.5px solid var(--ink);border-radius:99px;padding:.05rem .5rem;font-size:.75rem;font-weight:700}
+.res-score{font-size:1.7rem;font-weight:700;min-width:3.2rem;text-align:right}
+.res-score small{display:block;font-size:.65rem;color:var(--muted);font-weight:400}
+.over-actions{display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-top:1rem}
+.over-actions #over-again{grid-column:1 / -1;min-height:3.4rem;font-size:1.1rem}
+body.reduce-motion .pod-block,body.reduce-motion .res-bar span,body.reduce-motion #btn-undo{animation:none}
 
 /* ---------- phones and tablets ---------- */
 @media (max-width: 999px) {
@@ -256,9 +297,17 @@ button{touch-action:manipulation;-webkit-user-select:none;user-select:none;-webk
   .trayGrid::-webkit-scrollbar{display:none}
   .piece{height:100%;width:auto;aspect-ratio:var(--ar, 1);flex:0 0 auto;padding:.1rem;border-radius:10px;scroll-snap-align:start}
   .piece[aria-pressed=true]{box-shadow:inset 0 0 0 3px var(--ink)}
-  /* Suggest / Place: just below the screen */
+  /* Undo · Place, then Suggest: just below the screen */
   .actions{grid-area:act;margin-top:.3rem}
   .actions .btn{min-height:3.4rem;font-size:1rem;box-shadow:0 4px 0 var(--ink)}
+  /* game over: the board stays in view, with a bar to reopen the results */
+  .overbar{grid-row:5 / 7;grid-column:1 / -1;background:var(--paper);border:var(--bw) solid var(--ink);border-radius:12px;padding:.5rem}
+  .dlg.over{padding:.9rem .8rem}
+  .dlg.over h2{font-size:1.5rem}
+  .podium{height:8rem}
+  .res-row{grid-template-columns:1.9rem minmax(0,1fr) auto;gap:.45rem;padding:.45rem .55rem}
+  .res-rank{font-size:1.4rem}
+  .res-score{font-size:1.4rem;min-width:2.6rem}
 }
 @media (max-width: 999px) and (orientation: landscape) and (max-height: 520px) { /* phone turned sideways: fall back to a scrolling page */
   .screen.game{height:auto}

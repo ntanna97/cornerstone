@@ -19,9 +19,13 @@ Built to be comfortable for older players and anyone with low vision.
 - On phones the screen shows, top to bottom: the four players (whose turn it is is highlighted), the
   board as big as the screen allows, big arrow keys laid out like a keyboard (Rotate ▲ Flip / ◀ ▼ ▶), and
   one row of your pieces (each in a snug box, so the row is short and only slides sideways). The menu,
-  status line and zoom button are just above: scroll up. "Suggest a move" and "Place piece" are just
-  below: scroll down to confirm (or tap the piece on the board again).
-  Nothing changes size between turns, so the board never moves
+  status line and zoom button are just above: scroll up. Undo, Place piece and Suggest a move are just
+  below: scroll down to confirm. Tapping the piece on the board never places it by accident
+- Undo: once you've used more than half your pieces (11 of 21), an Undo button appears for 5 seconds
+  after each move. It takes back your move and any computer moves after it (online too, as long as no
+  other person has moved since)
+- A festive results screen (podium, medals, progress bars, badges), and "See the board" to look at the
+  finished game
 - Solid colour pieces. For colour-blind players, Settings can add a shape to each colour
   (circle, triangle, square, diamond)
 - The screen only changes when you ask: nothing zooms by itself. The piece you're placing has a thick
@@ -36,6 +40,13 @@ Built to be comfortable for older players and anyone with low vision.
 - Any seat can be a person or the computer (Gentle, Friendly challenge, Tough)
 - Advanced scoring: -1 per square left, +15 for placing every piece, +5 more if the single square goes last
 - Every finished game is saved on the device (score, squares left, time); "My scores" can export a CSV
+
+## Install as an app
+
+Cornerstone is a Progressive Web App. On Android/Chrome the main menu offers **Add to my home screen**;
+on iPhone/iPad it shows the steps (Share → Add to Home Screen). Installed, it opens full screen with its
+own icon, and the single-device game works with no internet connection (`sw.js` keeps a copy of the
+game; it always fetches the latest version when online).
 
 ## Online play
 

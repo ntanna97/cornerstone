@@ -63,6 +63,7 @@
     for (let i = 0; i < g.board.length; i++) mix(g.board[i] + 2);
     mix(g.turn); for (let c = 0; c < 4; c++) mix(g.out[c] ? 1 : 0);
     mix(n & 0xff); mix((n >> 8) & 0xff); mix((g.meta && g.meta.sharedCount) || 0);
+    for (let c = 0; c < 4; c++) { mix(g.placed[c]); mix(g.first[c] ? 1 : 0); for (let p = 0; p < g.used[c].length; p++) if (g.used[c][p]) mix(p + 32 * c); } // which pieces are used, not just the squares
     return h.toString(36);
   }
 
@@ -98,6 +99,9 @@
     let pending = {};         // moves that arrived before the one they follow
     let gapTimer = null;
     let early = {};           // moves that arrived before their game did (by game id): held, then applied when it arrives
+    let before = {};          // board before each recent move (for Undo), by sequence number
+    let appliedAt = {};       // when each recent move arrived here (the host uses this to enforce the Undo window)
+    self.ep = 0;              // bumps on every Undo: moves from before an Undo are ignored
     let closed = false;
     let wantSeat = opts.autoSeat !== false;
     let presenceSeen = !!opts.host;   // until my first presence list arrives, trust whoever sent me the room state
@@ -273,11 +277,11 @@
       if (!amHost() || self.lobby.phase !== 'lobby') return;
       if (self.lobby.seats.some((s) => s.type === 'open')) { emit('start-blocked'); return; }
       const g = E.newGame(); g.meta = { sharedCount: 0, moves: 0, last: null };
-      self.game = g; self.moveN = 0; log = {};
+      self.game = g; self.moveN = 0; log = {}; before = {}; appliedAt = {}; self.ep = 0;
       self.lobby.phase = 'playing';
       self.lobby.gameId = Math.random().toString(36).slice(2, 10);
       self.lobby.rev++;
-      transport.send('start', { lobby: self.lobby, game: E.serialize(g), n: 0 });
+      transport.send('start', { lobby: self.lobby, game: E.serialize(g), n: 0, ep: 0 });
       emit('start', self.lobby, g);
     };
     self.rematch = function () {
@@ -294,6 +298,8 @@
     // ---------- moves ----------
     function applyMove(m, local) {
       const g = self.game, c = m.color;
+      before[m.n] = E.serialize(E.cloneGame(g)); appliedAt[m.n] = Date.now(); // a full copy: later moves must not change it
+      delete before[m.n - 12]; delete appliedAt[m.n - 12];
       if (m.pass) g.out[c] = true;
       else {
         E.apply(g, c, m.p, m.cells);
@@ -316,7 +322,8 @@
       if (!self.actingColors().includes(m.color)) return { ok: false, reason: 'not-your-colour' };
       if (m.pass) { if (E.hasMove(g, m.color)) return { ok: false, reason: 'has-moves' }; }
       else { const r = E.check(g, m.color, m.cells); if (!r.ok) return r; }
-      m.gid = self.lobby.gameId; m.n = self.moveN + 1;
+      m.gid = self.lobby.gameId; m.n = self.moveN + 1; m.ep = self.ep;
+      m.by = self.myKey; m.bot = seatForColor(m.color).type !== 'human';
       applyMove(m, true);
       m.h = fingerprint(self.game, self.moveN);
       log[m.n] = m;
@@ -325,6 +332,36 @@
       return { ok: true };
     }
     self.proposeMove = (color, p, cells) => propose({ color, p, cells });
+
+    // ---- Undo: take back my last move, if only computer players have moved since ----
+    self.myLastMove = function () {
+      if (!self.started) return null;
+      for (let k = self.moveN; k > 0; k--) {
+        const m = log[k]; if (!m) return null;
+        if (m.by === self.myKey && !m.bot) return m;
+        if (!m.bot) return null; // another person has moved since
+      }
+      return null;
+    };
+    self.requestUndo = function (n) {
+      if (!self.started) return;
+      const req = { gid: self.lobby.gameId, ep: self.ep, n };
+      if (amHost()) handleUndo(req, self.myKey); else transport.send('undo-req', req);
+    };
+    function handleUndo(r, fromKey) { // host only: the host's board is the reference, so the host decides
+      const m = log[r.n], no = (reason) => { if (fromKey === self.myKey) emit('undo-no', reason); else transport.send('undo-no', { to: fromKey, reason }); };
+      if (!self.started || r.gid !== self.lobby.gameId || r.ep !== self.ep || !m || !before[r.n]) return no('gone');
+      if (m.by !== fromKey || m.bot) return no('gone');
+      for (let k = r.n + 1; k <= self.moveN; k++) if (!log[k] || !log[k].bot) return no('someone-moved');
+      if (Date.now() - appliedAt[r.n] > (T.undoMs || 5000) + 1500) return no('too-late');
+      self.game = E.deserialize(before[r.n]); self.moveN = r.n - 1; self.ep++;
+      for (let k = r.n; k <= r.n + 12; k++) { delete log[k]; delete before[k]; delete appliedAt[k]; }
+      pending = {};
+      const out = { lobby: self.lobby, game: E.serialize(self.game), n: self.moveN, ep: self.ep, by: fromKey, move: m, force: true };
+      transport.send('undone', out);
+      emit('sync', self.lobby, self.game);
+      emit('undone', { by: fromKey, move: m });
+    }
     self.proposePass = (color) => propose({ color, pass: true });
 
     function onMove(m) {
@@ -333,6 +370,7 @@
         return;
       }
       const g = self.game;
+      if ((m.ep || 0) !== self.ep) { if ((m.ep || 0) > self.ep) behind(); return; } // older: undone; newer: I missed an Undo
       if (m.n <= self.moveN) { // duplicate or re-send; only interesting if it disagrees with what I have
         if (m.n === self.moveN && m.h && m.h !== fingerprint(g, self.moveN)) { emit('debug', 'dup-mismatch n=' + m.n); outOfSync(); }
         return;
@@ -382,7 +420,7 @@
     }
     self.requestResync = (reason) => { if (!amHost()) throttled(reason || 'check'); };
     function syncPayload(to, force) {
-      return { to, force: !!force, lobby: self.lobby, game: self.started ? E.serialize(self.game) : null, n: self.moveN };
+      return { to, force: !!force, lobby: self.lobby, game: self.started ? E.serialize(self.game) : null, n: self.moveN, ep: self.ep };
     }
     function startHelloLoop(reason) {
       cancel(helloTimer); helloStarted = Date.now(); noHostTold = false;
@@ -416,10 +454,11 @@
     }
     function adoptGame(p) {
       const sameGame = self.game && self.lobby && self.lobby.gameId === p.lobby.gameId;
-      if (sameGame && !p.force && p.n < self.moveN) return false; // older than what I have
-      if (sameGame && !p.force && p.n === self.moveN && fingerprint(E.deserialize(p.game), p.n) === fingerprint(self.game, self.moveN)) return false; // nothing changed
+      if (sameGame && !p.force && (p.ep || 0) < self.ep) return false; // from before an Undo
+      if (sameGame && !p.force && (p.ep || 0) === self.ep && p.n < self.moveN) return false; // older than what I have
+      if (sameGame && !p.force && (p.ep || 0) === self.ep && p.n === self.moveN && fingerprint(E.deserialize(p.game), p.n) === fingerprint(self.game, self.moveN)) return false; // nothing changed
       if (!self.lobby || p.lobby.rev >= self.lobby.rev) self.lobby = clone(p.lobby);
-      self.game = E.deserialize(p.game); self.moveN = p.n; log = {}; pending = {};
+      self.game = E.deserialize(p.game); self.moveN = p.n; log = {}; pending = {}; before = {}; appliedAt = {}; self.ep = p.ep || 0;
       // apply any moves for this game that got here first, before telling anyone the game is ready
       const held = early[self.lobby.gameId]; early = {};
       if (held) {
@@ -442,7 +481,7 @@
       if (event !== 'bye' && leftKeys.has(fromKey)) leftKeys.delete(fromKey); // they came back
       switch (event) {
         case 'lobby': hostHint = fromKey; adoptLobby(p, true); break;
-        case 'start': hostHint = fromKey; adoptGame({ lobby: p.lobby, game: p.game, n: p.n, force: true }); setReady(true); refreshHost(); break;
+        case 'start': hostHint = fromKey; adoptGame({ lobby: p.lobby, game: p.game, n: p.n, ep: 0, force: true }); setReady(true); refreshHost(); break;
         case 'move': onMove(p); break;
         case 'sync':
           if (p.to && p.to !== self.myKey) break;
@@ -457,6 +496,7 @@
         case 'beat':
           if (!self.lobby || p.rev > self.lobby.rev) { throttled('behind'); break; }
           if (!self.started || p.gid !== self.lobby.gameId) break;
+          if ((p.ep || 0) !== self.ep) { if ((p.ep || 0) > self.ep) throttled('behind'); break; }
           if (p.n > self.moveN) { // probably just a move still on its way: give it a moment before asking for a catch-up
             const want = p.n, gid = p.gid;
             later(() => { if (self.started && self.lobby.gameId === gid && self.moveN < want) throttled('behind'); }, T.gapMs);
@@ -471,6 +511,18 @@
           break;
         case 'unclaim':
           if (amHost() && self.lobby.phase === 'lobby') { const s = self.lobby.seats[p.seat]; if (s && s.owner === fromKey) self.setSeat(p.seat, { type: 'open' }); }
+          break;
+        case 'undo-req':
+          if (amHost()) handleUndo(p, fromKey);
+          break;
+        case 'undo-no':
+          if (p.to === self.myKey) emit('undo-no', p.reason);
+          break;
+        case 'undone':
+          if (!self.started || p.lobby.gameId !== self.lobby.gameId || (p.ep || 0) <= self.ep) break;
+          self.game = E.deserialize(p.game); self.moveN = p.n; self.ep = p.ep; pending = {}; log = {}; before = {}; appliedAt = {};
+          emit('sync', self.lobby, self.game);
+          emit('undone', { by: p.by, move: p.move });
           break;
         case 'bye':
           leftKeys.add(fromKey);
@@ -487,7 +539,7 @@
 
     function sendBeat() {
       if (!amHost() || !self.lobby) return;
-      const b = { rev: self.lobby.rev, gid: self.lobby.gameId, n: self.moveN };
+      const b = { rev: self.lobby.rev, gid: self.lobby.gameId, n: self.moveN, ep: self.ep };
       if (self.started) b.h = fingerprint(self.game, self.moveN);
       transport.send('beat', b);
     }
